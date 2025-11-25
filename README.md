@@ -208,3 +208,8 @@ AstrBot/data/plugin_data/astrbot_plugin_chuanhuatong/
 - 若在其他插件中也修改了 `event.get_result()` 或拦截消息，请注意插件执行顺序以及 `event.stop_event()` 的使用，避免互相覆盖。
 <img width="1280" height="480" alt="c8a942fee1751694aa04c49771e204a0_720" src="https://github.com/user-attachments/assets/262ae4ba-3f7c-4f6a-aec0-e65e756dc82e" />
 
+## TODO
+
+- 群聊黑白名单切换，决定是否渲染
+- 预设保存，方便切换人物，但是可能需要重构数据存储
+- 添加透明度设置

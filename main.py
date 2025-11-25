@@ -298,6 +298,7 @@ class ChuanHuaTongPlugin(Star):
         self._ensure_prompt_template()
         self._last_background_path: str = ""
         self._last_character_path: str = ""
+        self._cleanup_tasks: set[asyncio.Task] = set()
 
     def cfg(self) -> Dict[str, Any]:
         try:
@@ -690,6 +691,29 @@ class ChuanHuaTongPlugin(Star):
             return
         except Exception as exc:
             logger.debug("[传话筒] 删除临时文件失败: %s", exc)
+
+    async def _delayed_cleanup(self, path: str, delay: float = 30.0):
+        try:
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            return
+        self._cleanup_temp_file(path)
+
+    def _schedule_cleanup(self, path: Optional[str], delay: float = 30.0):
+        if not path:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._cleanup_temp_file(path)
+            return
+        task = loop.create_task(self._delayed_cleanup(path, delay))
+        self._cleanup_tasks.add(task)
+
+        def _remove(_):
+            self._cleanup_tasks.discard(task)
+
+        task.add_done_callback(_remove)
 
     def _render_pillow_panel(self, text: str, emotion: str) -> Optional[str]:
         layout = self._layout()
@@ -1204,7 +1228,7 @@ class ChuanHuaTongPlugin(Star):
             logger.error(f"[传话筒] 设置图片结果失败: {exc}")
             event.set_result(event.plain_result(cleaned_text))
         finally:
-            self._cleanup_temp_file(image_path)
+            self._schedule_cleanup(image_path, delay=90.0)
 
     def _ensure_prompt_template(self):
         if not isinstance(self._cfg_obj, dict):

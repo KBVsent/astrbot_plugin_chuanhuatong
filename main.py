@@ -17,8 +17,13 @@ from aiohttp import web
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.provider import LLMResponse, ProviderRequest
-from astrbot.api.star import Context, Star, register
+from astrbot.api.star import Context, Star, register, StarTools
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
+
+try:
+    from pilmoji import Pilmoji
+except Exception:
+    Pilmoji = None
 
 PLAIN_COMPONENT_TYPES = tuple(
     getattr(Comp, name)
@@ -280,7 +285,7 @@ class ChuanHuaTongPlugin(Star):
         self._builtin_font_dir = self._base_dir / "ziti"
         self._builtin_font_dir.mkdir(parents=True, exist_ok=True)
 
-        self._data_dir = Path(os.getcwd()) / "data" / "plugin_data" / "astrbot_plugin_chuanhuatong"
+        self._data_dir = Path(StarTools.get_data_dir("astrbot_plugin_chuanhuatong"))
         self._data_dir.mkdir(parents=True, exist_ok=True)
         self._component_dir = self._data_dir / "zujian"
         self._component_dir.mkdir(parents=True, exist_ok=True)
@@ -746,9 +751,9 @@ class ChuanHuaTongPlugin(Star):
             if kind == "character":
                 self._draw_character_layer(canvas, layer.get("path"), layout)
             elif kind == "textbox":
-                self._draw_textbox_layer(canvas, draw, layout, layer.get("text", ""))
+                self._draw_textbox_layer(canvas, layout, layer.get("text", ""))
             elif kind == "text":
-                self._draw_overlay_text(draw, layer.get("overlay"))
+                self._draw_overlay_text(canvas, layer.get("overlay"))
             elif kind == "glass":
                 self._draw_glass_layer(canvas, layer.get("overlay"))
             elif kind == "image":
@@ -774,7 +779,46 @@ class ChuanHuaTongPlugin(Star):
         except Exception:
             logger.debug("[传话筒] 立绘渲染失败", exc_info=True)
 
-    def _draw_textbox_layer(self, canvas: Image.Image, draw: ImageDraw.ImageDraw, layout: Dict[str, Any], text: str):
+    def _draw_rich_text(
+        self,
+        canvas: Image.Image,
+        position: tuple[int, int],
+        text: str,
+        font: ImageFont.ImageFont,
+        fill: tuple[int, int, int, int],
+        stroke_width: int = 0,
+        stroke_fill: tuple[int, int, int, int] = (0, 0, 0, 255),
+        spacing: int = 0,
+    ):
+        if not text:
+            return
+        if Pilmoji:
+            try:
+                with Pilmoji(canvas) as pilmoji:
+                    pilmoji.text(
+                        position,
+                        text,
+                        font=font,
+                        fill=fill,
+                        stroke_width=stroke_width,
+                        stroke_fill=stroke_fill,
+                        spacing=spacing,
+                    )
+                    return
+            except Exception:
+                logger.debug("[传话筒] Pilmoji 渲染失败，回退到 Pillow。", exc_info=True)
+        draw = ImageDraw.Draw(canvas)
+        draw.multiline_text(
+            position,
+            text,
+            font=font,
+            fill=fill,
+            spacing=spacing,
+            stroke_width=stroke_width,
+            stroke_fill=stroke_fill,
+        )
+
+    def _draw_textbox_layer(self, canvas: Image.Image, layout: Dict[str, Any], text: str):
         box_left = int(layout.get("box_left", 520))
         box_top = int(layout.get("box_top", 160))
         box_width = max(20, int(layout.get("box_width", 640)))
@@ -786,17 +830,19 @@ class ChuanHuaTongPlugin(Star):
         font = self._load_font(layout.get("font_size", 30), preferred=layout.get("body_font"))
         text_area_w = max(10, box_width - padding * 2)
         wrapped = self._wrap_text(text, font, max(10, text_area_w))
-        draw.multiline_text(
+        spacing = max(0, int(font.size * (float(layout.get("line_height", 1.6)) - 1)))
+        self._draw_rich_text(
+            canvas,
             (box_left + padding, box_top + padding),
             wrapped,
-            font=font,
-            fill=self._hex_or_rgba(layout.get("text_color", "#FFFFFF")),
-            spacing=int(font.size * (layout.get("line_height", 1.6) - 1)),
+            font,
+            self._hex_or_rgba(layout.get("text_color", "#FFFFFF")),
             stroke_width=stroke_width,
             stroke_fill=stroke_color,
+            spacing=spacing,
         )
 
-    def _draw_overlay_text(self, draw: ImageDraw.ImageDraw, overlay: Optional[Dict[str, Any]]):
+    def _draw_overlay_text(self, canvas: Image.Image, overlay: Optional[Dict[str, Any]]):
         if not overlay or not overlay.get("visible", True):
             return
         text_val = overlay.get("text", "")
@@ -809,11 +855,12 @@ class ChuanHuaTongPlugin(Star):
         text_tip = self._wrap_text(text_val, font, width_o)
         stroke_width = max(0, int(overlay.get("stroke_width", 0)))
         stroke_color = self._hex_or_rgba(overlay.get("stroke_color", "#000000"))
-        draw.multiline_text(
+        self._draw_rich_text(
+            canvas,
             (left, top),
             text_tip,
-            font=font,
-            fill=self._hex_or_rgba(overlay.get("color", "#FFFFFF")),
+            font,
+            self._hex_or_rgba(overlay.get("color", "#FFFFFF")),
             stroke_width=stroke_width,
             stroke_fill=stroke_color,
         )

@@ -1,0 +1,99 @@
+{
+  "enable_render": {
+    "type": "bool",
+    "description": "拦截纯文本回复并渲染为图片",
+    "default": true
+  },
+
+  "render_char_threshold": {
+    "type": "int",
+    "description": "渲染字符阈值（0 为不限制，超过阈值则直接发送纯文本）",
+    "default": 60
+  },
+
+  "image_type": {
+    "type": "string",
+    "description": "渲染输出格式，png 或 jpeg",
+    "default": "png"
+  },
+
+  "font_path": {
+    "type": "string",
+    "description": "Pillow 备用渲染使用的字体文件路径，不填则自动匹配系统字体",
+    "default": ""
+  },
+
+  "background_dir": {
+    "type": "string",
+    "description": "背景图片目录（插件目录下）",
+    "default": "background"
+  },
+
+  "character_root": {
+    "type": "string",
+    "description": "立绘子目录根路径（插件目录下）",
+    "default": "renwulihui"
+  },
+
+  "default_emotion": {
+    "type": "string",
+    "description": "未解析出标签时使用的情绪 key",
+    "default": "neutral"
+  },
+
+  "enable_emotion_prompt": {
+    "type": "bool",
+    "description": "是否在 LLM 请求前补充情绪标签提示语",
+    "default": true
+  },
+
+  "emotion_prompt_template": {
+    "type": "text",
+    "description": "追加到 system_prompt 的提示，可用 {tags} 代表全部标签",
+    "default": "当你回答时，请根据文本情绪，在回答正文中就近插入一个情绪标签，包括且仅限 {tags} 中的一个。标签不得含有其他符号。"
+  },
+
+  "webui_enabled": {
+    "type": "bool",
+    "description": "是否启动文本框拖拽 WebUI",
+    "default": true
+  },
+
+  "webui_host": {
+    "type": "string",
+    "description": "WebUI 监听地址",
+    "default": "127.0.0.1"
+  },
+  "webui_port": {
+    "type": "int",
+    "description": "WebUI 端口",
+    "default": 18765
+  },
+  "webui_token": {
+    "type": "string",
+    "description": "访问 WebUI 时需要附带的 token，可留空",
+    "default": ""
+  },
+
+  "emotion_sets": {
+    "type": "list",
+    "description": "情绪标签及其对应的立绘文件夹、展示文本与颜色，若不填则使用默认",
+    "default": [
+      { "key": "happy", "folder": "happy", "label": "开心", "color": "#FFC857", "enabled": true },
+      { "key": "sad", "folder": "sad", "label": "低落", "color": "#7DA1FF", "enabled": true },
+      { "key": "shy", "folder": "shy", "label": "害羞", "color": "#F9C5D1", "enabled": true },
+      { "key": "surprise", "folder": "surprise", "label": "惊讶", "color": "#F5E960", "enabled": true },
+      { "key": "angry", "folder": "sad", "label": "生气", "color": "#FF8A8A", "enabled": true }
+    ],
+    "items": {
+      "type": "object",
+      "items": {
+        "key":   { "type": "string", "description": "情绪标签（英文/数字）" },
+        "folder":{ "type": "string", "description": "对应立绘所在文件夹" },
+        "label": { "type": "string", "description": "界面展示用的中文名" },
+        "color": { "type": "string", "description": "角标颜色" },
+        "enabled": { "type": "bool", "default": true }
+      }
+    }
+  }
+}

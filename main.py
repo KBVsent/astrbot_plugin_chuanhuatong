@@ -47,7 +47,7 @@ class EmotionMeta:
     "astrbot_plugin_chuanhuatong",
     "bvzrays",
     "传话筒：将 Bot 的文字回复渲染为 Gal 风立绘对话框",
-    "1.3.0",
+    "1.6.0",
     "https://github.com/bvzrays/astrbot_plugin_chuanhuatong",
 )
 class ChuanHuaTongPlugin(Star):

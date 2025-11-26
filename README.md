@@ -1,10 +1,10 @@
 ## 传话筒（astrbot_plugin_chuanhuatong）
 
-> **当前版本：v1.3.0**
+> **当前版本：v1.6.0**
 
 将 AstrBot 的纯文本回复转换成带立绘的 GalGame 风聊天框图片，支持情绪差分、多层文本、拖拽式 WebUI 布局与自定义组件模板。
-<img width="664" height="672" alt="image" src="https://github.com/user-attachments/assets/4107149a-b8e9-486e-b585-e86a4bf94b28" />
 
+【这里放整体效果演示图片】
 
 ---
 
@@ -35,6 +35,15 @@
   - 图层列表类似 Photoshop：支持调整 z-index、透明度、可见性、删除等。
   - 文本层支持自定义字体、字号、颜色、**描边宽度 / 颜色**，边框可拖拽控制自动换行与字体自适应。
 
+- **多预设保存 / 一键切换**
+  - WebUI 保存时可输入名称，自动写入 `data/.../presets/*.json`，方便管理不同剧本皮肤。
+  - 在任何对话中发送 `/切换预设 预设名`（兼容 `*切换预设` 写法），即可即时切换到指定布局，无需离开聊天窗口。
+  - 预设管理面板内置“覆盖当前”“另存为”按钮，实时刷新角色组与立绘预览，所见即所得。
+
+- **立绘角色分组 + 差分**
+  - WebUI 上传立绘前，可先选择“角色分组”，再选择情绪/差分目录，或分别填写自定义名称。
+  - 插件会自动落盘到 `data/.../characters/<角色>/<情绪>/`，预设中可指定某个角色组，渲染时会根据情绪标签自动切换该角色组下的对应差分。
+
 - **组件与毛玻璃模板**
   - 可以将对话框外框、按钮、角标等作为“组件图层”自由摆放。
   - 毛玻璃效果作为独立图层存在，可与主文本框分离，放在任意位置。
@@ -43,8 +52,7 @@
   - 完全基于本地 Pillow 渲染，无需浏览器 / Playwright。
   - 如渲染出错会自动回退为纯文本发送，保证消息不丢失。
 
-<img width="2061" height="1002" alt="image" src="https://github.com/user-attachments/assets/2b13c520-096b-492a-abdf-57c388d5162d" />
-
+【这里放 WebUI 布局编辑界面截图】
 
 ---
 
@@ -56,14 +64,13 @@
 
 2. **在 AstrBot 中启用插件**
    - 打开 AstrBot WebUI → **插件管理**，启用 `传话筒（astrbot_plugin_chuanhuatong）`。
-   - 如有需要，可配置端口、情绪标签、渲染阈值等。
+   - 如有需要，可先点击“配置”按钮预设端口、情绪标签、渲染阈值等。
 
 3. **确认 WebUI 端口**
    - 默认 WebUI 监听：`http://127.0.0.1:18765`
    - 可在配置中修改 `webui_host` / `webui_port`，请确保端口未被其他程序占用。
 
-<img width="957" height="237" alt="image" src="https://github.com/user-attachments/assets/c32ff15e-e599-461c-9ef7-b6fb5860665d" />
-
+【这里放 AstrBot 插件列表中显示本插件的截图】
 
 ---
 
@@ -91,17 +98,26 @@
   - 主文本框及文本层均支持自动换行与字体自适应缩放，使文本完整落在框内。
 
 - **资产上传**
-  - WebUI 提供“上传资产”区域：
+  - WebUI 提供卡片式“上传资产”区域：
     - 上传 PNG/WebP/GIF 到组件目录。
     - 上传 TTF/TTC/OTF 字体到字体目录。
-  - 上传成功后，组件 / 字体会自动出现在下拉列表中可选。
+    - 上传 PNG/WebP 立绘到 `data/.../characters/<角色>/<情绪>/`，上传前可选择角色分组与情绪（或自定义目录），方便与自动情绪匹配。
+  - 上传成功后，组件 / 字体 / 立绘会自动出现在下拉列表中可选。
 
 - **配置持久化**
   - 布局配置保存在：
     - `AstrBot/data/plugin_data/astrbot_plugin_chuanhuatong/layout_state.json`
   - 重启 AstrBot 或重新加载插件不会丢失布局；点击“重置布局”可回到插件内置的默认模板。
 
-<img width="351" height="692" alt="image" src="https://github.com/user-attachments/assets/b806865d-b178-471e-be62-f56d67fac952" />
+【这里放 WebUI 文本样式编辑区域截图】
+
+---
+
+## 快速预设指令
+
+- **切换指令**：在任意对话中发送 `/切换预设 预设名称`（亦可写成 `*切换预设`），插件会立即加载对应的 `presets/*.json` 并同步 WebUI 当前布局。
+- **命名约定**：名称与 WebUI 保存弹窗中填写的一致，不区分大小写；找不到同名预设时会提示失败。
+- **典型用法**：为不同人物/舞台准备多套布局，直播中直接通过文字指令切换，无需离开聊天窗口。
 
 ---
 
@@ -124,9 +140,8 @@
 - **默认情绪与回退逻辑**
   - 如果文本中没有出现任何已知标签，则使用配置项 `default_emotion`。
   - 若 `default_emotion` 无法匹配到有效目录，会使用第一个已启用的情绪作为回退。
-<img width="194" height="152" alt="image" src="https://github.com/user-attachments/assets/79d71da6-0a9b-466f-976b-2abbac0ece2a" />
 
-
+【这里放不同情绪立绘对比的拼图截图】
 
 ---
 
@@ -158,8 +173,8 @@ astrbot_plugin_chuanhuatong/
   - 完整路径示例：
     - `AstrBot/data/plugins/astrbot_plugin_chuanhuatong/zujian/名称框.png`
   - 这样默认布局中的组件图层就能直接引用这些图片，第一次打开 WebUI 即可看到完整模板布局。
-<img width="683" height="314" alt="image" src="https://github.com/user-attachments/assets/b8a94f38-ef89-42bf-b280-a3891ea06121" />
 
+【这里放资源目录结构（资源管理器截图）】
 
 ---
 
@@ -170,12 +185,27 @@ astrbot_plugin_chuanhuatong/
 ```text
 AstrBot/data/plugin_data/astrbot_plugin_chuanhuatong/
 ├── layout_state.json   # WebUI 保存的布局（用户可编辑）
+├── presets/            # 多预设 JSON，每个文件对应一个布局
 ├── zujian/             # WebUI 上传的额外组件（PNG/WebP/GIF）
+├── characters/         # WebUI 上传的立绘，支持 <角色>/<情绪>/ 文件夹结构
 └── fonts/              # WebUI 上传的字体文件
 ```
 
-- 直接将组件 / 字体文件放入上述目录也会被 WebUI 识别。
+- 默认情况下，路径位于 `AstrBot/data/plugin_data/astrbot_plugin_chuanhuatong/`；若 AstrBot 被配置为使用其他数据根目录，插件会在日志中输出实际路径，可据此定位文件。
+- 立绘目录推荐结构：`characters/<角色名>/<情绪名>/<文件>`，例如 `characters/白毛/happy/001.png`。
+- 直接将组件 / 立绘 / 字体文件放入上述目录（及其子目录）也会被 WebUI 识别。
 - 用户上传的组件与字体会与插件内置的文件一起出现在下拉列表中，可在 WebUI 中统一管理。
+
+【这里放 data 目录结构截图】
+
+---
+
+### 立绘角色分组
+
+- **目录层级**：推荐结构为 `characters/<角色>/<情绪>/<文件>`，角色名和情绪名均可自定义；也兼容旧版的 `characters/<情绪>/<文件>` 单层结构。
+- **上传流程**：在 WebUI 的“资源上传”面板中，先选择或输入角色分组，再选择情绪 / 差分，点击“传立绘”即可自动创建对应目录。
+- **预设切换**：在“立绘 (Character)”面板中，新增“角色分组”下拉框。每个预设都可以记住自己的角色组，渲染时会根据文本情绪在该角色组下寻找对应差分，找不到则回退到其他角色 / 内置立绘。
+- **命名规范**：角色名称仅允许英文、数字、下划线、连字符，若输入其他字符会自动转换为 `_`。
 
 ---
 
@@ -206,10 +236,21 @@ AstrBot/data/plugin_data/astrbot_plugin_chuanhuatong/
 - 插件主要依赖 Pillow 进行图像渲染，请确保运行环境中安装了对应依赖。
 - 未检测到背景或立绘文件时，会自动降级为纯背景 / 无立绘模式，保证消息仍可正常发送。
 - 若在其他插件中也修改了 `event.get_result()` 或拦截消息，请注意插件执行顺序以及 `event.stop_event()` 的使用，避免互相覆盖。
-<img width="1280" height="480" alt="c8a942fee1751694aa04c49771e204a0_720" src="https://github.com/user-attachments/assets/262ae4ba-3f7c-4f6a-aec0-e65e756dc82e" />
 
-## TODO
+【这里放实际聊天窗口中渲染结果的截图】
 
-- 群聊黑白名单切换，决定是否渲染
-- 预设保存，方便切换人物，但是可能需要重构数据存储
-- 添加透明度设置
+---
+
+## 更新日志
+
+### v1.6.0
+- 预设管理面板新增状态提示与“覆盖当前 / 另存为”按钮，应用或保存后会自动刷新角色组与立绘预览。
+- `/切换预设` 指令兼容 `*切换预设` 等写法，聊天内切换更顺手。
+- “资源上传”区改为卡片式布局，立绘上传时可同时指定角色分组与情绪，流程提示更清晰。
+- README 更新至 v1.6.0，补充新版交互说明。
+
+### v1.5.0
+- WebUI 上传立绘支持「情绪 / 差分」选择框，自动读取 `emotion_sets` 并可填写自定义目录。
+- 新增“角色分组”概念，目录结构升级为 `characters/<角色>/<情绪>/文件`；预设可独立选择角色组，渲染时会按角色 + 情绪匹配差分。
+- 用户立绘会在“预览立绘”选择器中按 `用户/角色/情绪/文件` 展示，便于定位。
+- README、元数据同步到 v1.5.0，文档补充差分上传与目录结构说明。

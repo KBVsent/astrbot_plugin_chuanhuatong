@@ -8,6 +8,7 @@ import random
 import re
 import tempfile
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 from uuid import uuid4
@@ -53,6 +54,10 @@ class ChuanHuaTongPlugin(Star):
     """传话筒——拦截所有文本回复并渲染立绘对话框。"""
 
     EMOTION_PATTERN = re.compile(r"&([a-zA-Z0-9_]+)&")
+    ROLE_AUTO = "__auto__"
+    ROLE_BUILTIN = "__builtin__"
+    ROLE_LEGACY = "__legacy__"
+    PLUGIN_ID = "astrbot_plugin_chuanhuatong"
 
     DEFAULT_EMOTIONS: list[dict[str, Any]] = [
         {"key": "neutral", "folder": "shy", "label": "平静", "color": "#A9C5FF", "enabled": True},
@@ -94,6 +99,7 @@ class ChuanHuaTongPlugin(Star):
         "character_bottom": 0,
         "character_width": 499.72719967439286,
         "character_z_index": 140,
+        "character_role": "__auto__",
         "character_shadow": "drop-shadow(0 12px 36px rgba(0,0,0,0.6))",
         "text_overlays": [
             {
@@ -285,12 +291,15 @@ class ChuanHuaTongPlugin(Star):
         self._builtin_font_dir = self._base_dir / "ziti"
         self._builtin_font_dir.mkdir(parents=True, exist_ok=True)
 
-        self._data_dir = Path(StarTools.get_data_dir("astrbot_plugin_chuanhuatong"))
-        self._data_dir.mkdir(parents=True, exist_ok=True)
+        self._data_dir = self._resolve_data_dir()
         self._component_dir = self._data_dir / "zujian"
         self._component_dir.mkdir(parents=True, exist_ok=True)
         self._font_dir = self._data_dir / "fonts"
         self._font_dir.mkdir(parents=True, exist_ok=True)
+        self._user_char_dir = self._data_dir / "characters"
+        self._user_char_dir.mkdir(parents=True, exist_ok=True)
+        self._presets_dir = self._data_dir / "presets"
+        self._presets_dir.mkdir(parents=True, exist_ok=True)
         self._layout_file = self._data_dir / "layout_state.json"
         self._layout_lock = asyncio.Lock()
         self._layout_state = self._load_layout_state()
@@ -304,6 +313,8 @@ class ChuanHuaTongPlugin(Star):
         self._last_background_path: str = ""
         self._last_character_path: str = ""
         self._cleanup_tasks: set[asyncio.Task] = set()
+
+        logger.info("[传话筒] 数据目录：%s", self._data_dir)
 
     def cfg(self) -> Dict[str, Any]:
         try:
@@ -346,6 +357,192 @@ class ChuanHuaTongPlugin(Star):
         normalized = self._normalize_layout(layout)
         self._layout_state = normalized
         self._save_layout_state(normalized)
+
+    def _sanitize_preset_name(self, name: str) -> str:
+        name = str(name or "").strip()
+        return re.sub(r"\s+", " ", name)
+
+    def _sanitize_folder_name(self, name: str, default: str = "custom") -> str:
+        name = str(name or "").strip()
+        if not name:
+            return default
+        slug = re.sub(r"[^0-9a-zA-Z_-]+", "_", name).strip("_")
+        if not slug:
+            return default
+        return slug[:50]
+
+    def _sanitize_role_name(self, name: str, default: str = "role") -> str:
+        return self._sanitize_folder_name(name, default)
+
+    @staticmethod
+    def _dir_has_image(directory: Path) -> bool:
+        try:
+            for f in directory.iterdir():
+                if f.is_file() and f.suffix.lower() in {".png", ".webp"}:
+                    return True
+        except Exception:
+            return False
+        return False
+
+    def _discover_user_roles(self) -> dict[str, dict[str, Any]]:
+        roles: dict[str, dict[str, Any]] = {}
+        if not self._user_char_dir.exists():
+            return roles
+        legacy_emotions: set[str] = set()
+        try:
+            for entry in self._user_char_dir.iterdir():
+                if entry.is_dir():
+                    sub_emotions: set[str] = set()
+                    has_images = False
+                    for child in entry.iterdir():
+                        if child.is_dir():
+                            if self._dir_has_image(child):
+                                sub_emotions.add(child.name)
+                        elif child.is_file() and child.suffix.lower() in {".png", ".webp"}:
+                            has_images = True
+                    if sub_emotions:
+                        roles[entry.name] = {"label": entry.name, "emotions": sub_emotions}
+                        continue
+                    if has_images:
+                        legacy_emotions.add(entry.name)
+                elif entry.is_file() and entry.suffix.lower() in {".png", ".webp"}:
+                    legacy_emotions.add("default")
+        except Exception:
+            logger.debug("[传话筒] 枚举用户立绘角色失败", exc_info=True)
+        if legacy_emotions:
+            roles[self.ROLE_LEGACY] = {"label": "旧版上传", "emotions": legacy_emotions, "source": "legacy"}
+        return roles
+
+    def _list_character_roles(self) -> list[dict[str, Any]]:
+        roles: list[dict[str, Any]] = []
+        builtin_emotions: set[str] = set()
+        try:
+            if self._char_dir.exists():
+                for emotion_dir in self._char_dir.iterdir():
+                    if emotion_dir.is_dir() and self._dir_has_image(emotion_dir):
+                        builtin_emotions.add(emotion_dir.name)
+        except Exception:
+            pass
+        if builtin_emotions:
+            roles.append({
+                "id": self.ROLE_BUILTIN,
+                "label": "内置立绘",
+                "source": "builtin",
+                "emotions": sorted(builtin_emotions),
+            })
+        user_roles = self._discover_user_roles()
+        for role_id, meta in user_roles.items():
+            roles.append({
+                "id": role_id,
+                "label": meta.get("label", role_id),
+                "source": meta.get("source", "user"),
+                "emotions": sorted(meta.get("emotions", [])),
+            })
+        return roles
+
+    def _resolve_data_dir(self) -> Path:
+        """优先使用 StarTools 数据目录，失败时退回到 AstrBot/data/plugin_data 下。"""
+        fallback_dir = self._base_dir.parent.parent / "plugin_data" / self.PLUGIN_ID
+        try:
+            preferred_raw = StarTools.get_data_dir(self.PLUGIN_ID)
+        except Exception:
+            preferred_raw = None
+        if preferred_raw:
+            preferred_path = Path(preferred_raw)
+            try:
+                preferred_path.mkdir(parents=True, exist_ok=True)
+                return preferred_path
+            except Exception as exc:
+                logger.warning("[传话筒] 创建数据目录失败(%s)，退回 fallback：%s", exc, fallback_dir)
+        fallback_dir.mkdir(parents=True, exist_ok=True)
+        return fallback_dir
+
+    def _preset_slug(self, name: str) -> str:
+        base = re.sub(r"[^0-9a-zA-Z_-]+", "-", name.strip().lower())
+        base = base.strip("-_")[:60]
+        return base or uuid4().hex
+
+    def _preset_file(self, slug: str) -> Path:
+        safe = re.sub(r"[^0-9a-zA-Z_-]+", "-", slug.strip().lower()) or uuid4().hex
+        return self._presets_dir / f"{safe}.json"
+
+    def _read_preset_file(self, file_path: Path) -> Optional[Dict[str, Any]]:
+        try:
+            data = json.loads(file_path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                return None
+            if not isinstance(data.get("layout"), dict):
+                return None
+            data.setdefault("name", file_path.stem)
+            data.setdefault("slug", file_path.stem)
+            data["_path"] = file_path
+            return data
+        except Exception:
+            logger.warning("[传话筒] 读取预设文件失败: %s", file_path)
+            return None
+
+    def _list_presets(self) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        try:
+            for file_path in sorted(self._presets_dir.glob("*.json")):
+                record = self._read_preset_file(file_path)
+                if not record:
+                    continue
+                records.append({
+                    "name": record.get("name"),
+                    "slug": record.get("slug"),
+                    "saved_at": record.get("saved_at"),
+                })
+        except Exception as exc:
+            logger.debug("[传话筒] 列出预设失败: %s", exc)
+        return records
+
+    def _find_preset(self, identifier: str) -> Optional[Dict[str, Any]]:
+        key = str(identifier or "").strip().lower()
+        if not key:
+            return None
+        # 先尝试直接匹配文件名
+        direct = self._preset_file(key)
+        if direct.exists():
+            record = self._read_preset_file(direct)
+            if record:
+                return record
+        for file_path in self._presets_dir.glob("*.json"):
+            record = self._read_preset_file(file_path)
+            if not record:
+                continue
+            slug = str(record.get("slug") or "").lower()
+            name = str(record.get("name") or "").lower()
+            if key in {slug, name}:
+                return record
+        return None
+
+    def _save_preset(self, name: str, layout: Dict[str, Any]) -> dict[str, Any]:
+        cleaned_name = self._sanitize_preset_name(name)
+        normalized = self._normalize_layout(layout)
+        existing = self._find_preset(cleaned_name)
+        slug = (existing or {}).get("slug") or self._preset_slug(cleaned_name or uuid4().hex)
+        path = self._preset_file(slug)
+        payload = {
+            "name": cleaned_name or slug,
+            "slug": slug,
+            "saved_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            "layout": normalized,
+        }
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        return payload
+
+    def _load_preset(self, identifier: str) -> Optional[Dict[str, Any]]:
+        record = self._find_preset(identifier)
+        if not record:
+            return None
+        layout = self._normalize_layout(record.get("layout") or {})
+        return {
+            "name": record.get("name"),
+            "slug": record.get("slug"),
+            "saved_at": record.get("saved_at"),
+            "layout": layout,
+        }
 
     def _normalize_layout(self, layout: Dict[str, Any]) -> Dict[str, Any]:
         data = copy.deepcopy(self.DEFAULT_LAYOUT)
@@ -455,22 +652,46 @@ class ChuanHuaTongPlugin(Star):
         return sorted(names.keys())
 
     def _list_characters(self) -> list[str]:
-        """列出所有立绘文件（从renwulihui文件夹的所有子文件夹中）"""
-        names: Dict[str, Path] = {}
+        """列出所有立绘文件（内置 + 用户自定义）"""
+        entries: set[str] = set()
         try:
-            if not self._char_dir.exists():
-                return []
-            # 遍历所有情绪文件夹
-            for emotion_dir in self._char_dir.iterdir():
-                if not emotion_dir.is_dir():
-                    continue
-                for f in emotion_dir.iterdir():
-                    if f.is_file() and f.suffix.lower() in {".png", ".webp"}:
-                        if f.name not in names:
-                            names[f.name] = f
+            if self._char_dir.exists():
+                for emotion_dir in self._char_dir.iterdir():
+                    if not emotion_dir.is_dir():
+                        continue
+                    for f in emotion_dir.iterdir():
+                        if f.is_file() and f.suffix.lower() in {".png", ".webp"}:
+                            entries.add(f.name)
         except Exception:
             pass
-        return sorted(names.keys())
+        try:
+            if self._user_char_dir.exists():
+                for folder in self._user_char_dir.iterdir():
+                    if folder.is_file():
+                        if folder.suffix.lower() in {".png", ".webp"}:
+                            entries.add(f"user::custom::{folder.name}")
+                        continue
+                    if not folder.is_dir():
+                        continue
+                    subdirs = [d for d in folder.iterdir() if d.is_dir()]
+                    if subdirs:
+                        for emo_dir in subdirs:
+                            if not emo_dir.is_dir():
+                                continue
+                            for f in emo_dir.iterdir():
+                                if f.is_file() and f.suffix.lower() in {".png", ".webp"}:
+                                    entries.add(f"user::{folder.name}::{emo_dir.name}::{f.name}")
+                        continue
+                    for f in folder.iterdir():
+                        if f.is_file() and f.suffix.lower() in {".png", ".webp"}:
+                            entries.add(f"user::{self.ROLE_LEGACY}::{folder.name}::{f.name}")
+                # 处理直接位于根目录的文件
+                for f in self._user_char_dir.iterdir():
+                    if f.is_file() and f.suffix.lower() in {".png", ".webp"}:
+                        entries.add(f"user::{self.ROLE_LEGACY}::default::{f.name}")
+        except Exception:
+            pass
+        return sorted(entries)
 
     def _resolve_font_path(self, name: str) -> Optional[str]:
         if not name:
@@ -580,11 +801,89 @@ class ChuanHuaTongPlugin(Star):
         self._last_background_path = path or ""
         return self._path_to_data_url(path)
 
-    def _random_character_data(self, emotion_key: str) -> str:
-        path = self._pick_character_path(emotion_key)
+    def _random_character_data(self, emotion_key: str, role: Optional[str] = None) -> str:
+        path = self._pick_character_path(emotion_key, role)
         return self._path_to_data_url(path)
 
-    def _pick_character_path(self, emotion_key: str) -> str:
+    def _pick_character_path(self, emotion_key: str, role: Optional[str] = None) -> str:
+        role = (role or "").strip() or self.ROLE_AUTO
+        if role in {self.ROLE_AUTO, "__random__"}:
+            path = self._pick_auto_character(emotion_key)
+            self._last_character_path = path or ""
+            return path or ""
+        if role == self.ROLE_BUILTIN:
+            path = self._pick_builtin_character(emotion_key)
+            if path:
+                self._last_character_path = path
+                return path
+            return self._pick_auto_character(emotion_key)
+        if role == self.ROLE_LEGACY:
+            path = self._pick_user_role_character(self.ROLE_LEGACY, emotion_key)
+            if path:
+                return path
+            return self._pick_auto_character(emotion_key)
+        path = self._pick_user_role_character(role, emotion_key)
+        if path:
+            return path
+        return self._pick_auto_character(emotion_key)
+
+    def _pick_auto_character(self, emotion_key: str) -> str:
+        user_roles = self._discover_user_roles()
+        for role_id in user_roles.keys():
+            if role_id == self.ROLE_LEGACY:
+                continue
+            path = self._pick_user_role_character(role_id, emotion_key)
+            if path:
+                return path
+        legacy_path = self._pick_user_role_character(self.ROLE_LEGACY, emotion_key)
+        if legacy_path:
+            return legacy_path
+        return self._pick_builtin_character(emotion_key)
+
+    def _pick_user_role_character(self, role: str, emotion_key: str) -> str:
+        if not self._user_char_dir.exists():
+            return ""
+        mapping = self._emotion_meta()
+        meta = mapping.get(emotion_key)
+        if not meta and mapping:
+            meta = next(iter(mapping.values()))
+        preferred_folder = meta.folder if meta else ""
+        if role == self.ROLE_LEGACY:
+            if preferred_folder:
+                legacy_dir = self._user_char_dir / preferred_folder
+                if legacy_dir.exists():
+                    path = self._pick_random_asset(legacy_dir, {".png", ".webp"})
+                    if path:
+                        self._last_character_path = path
+                        return path
+            path = self._pick_random_asset(self._user_char_dir, {".png", ".webp"})
+            if path:
+                self._last_character_path = path
+            return path or ""
+        role_dir = self._user_char_dir / role
+        if not role_dir.exists():
+            return ""
+        candidate_dirs: list[Path] = []
+        if preferred_folder:
+            candidate_dirs.append(role_dir / preferred_folder)
+        try:
+            for sub in role_dir.iterdir():
+                if sub.is_dir() and sub.name != preferred_folder:
+                    candidate_dirs.append(sub)
+        except Exception:
+            pass
+        for directory in candidate_dirs:
+            if directory.exists():
+                path = self._pick_random_asset(directory, {".png", ".webp"})
+                if path:
+                    self._last_character_path = path
+                    return path
+        path = self._pick_random_asset(role_dir, {".png", ".webp"})
+        if path:
+            self._last_character_path = path
+        return path or ""
+
+    def _pick_builtin_character(self, emotion_key: str) -> str:
         mapping = self._emotion_meta()
         meta = mapping.get(emotion_key)
         if not meta and mapping:
@@ -632,40 +931,69 @@ class ChuanHuaTongPlugin(Star):
         return ""
 
     def _resolve_character_file(self, name: str) -> str:
-        """解析立绘文件路径（从renwulihui文件夹的所有子文件夹中查找）"""
+        """解析立绘文件路径（支持内置与用户上传）"""
         if not name:
+            return ""
+        marker = "user::"
+        if name.startswith(marker):
+            trimmed = name[len(marker):].strip()
+            parts = [p for p in trimmed.split("::") if p is not None]
+            role = self.ROLE_LEGACY
+            emotion = "default"
+            filename = ""
+            if len(parts) == 1:
+                filename = parts[0]
+            elif len(parts) == 2:
+                emotion, filename = parts
+            elif len(parts) >= 3:
+                role, emotion, filename = parts[0], parts[1], parts[2]
+            role_slug = self._sanitize_role_name(role or self.ROLE_LEGACY, self.ROLE_LEGACY)
+            emotion_slug = self._sanitize_folder_name(emotion or "default", "default")
+            filename = Path(filename or "").name
+            if role_slug == self.ROLE_LEGACY:
+                legacy_target = self._user_char_dir / emotion_slug / filename
+                if legacy_target.exists():
+                    return str(legacy_target)
+                legacy_flat = self._user_char_dir / filename
+                if legacy_flat.exists():
+                    return str(legacy_flat)
+            else:
+                target = self._user_char_dir / role_slug / emotion_slug / filename
+                if target.exists():
+                    return str(target)
             return ""
         safe = Path(name).name
         try:
-            if not self._char_dir.exists():
-                return ""
-            # 遍历所有情绪文件夹查找文件
-            for emotion_dir in self._char_dir.iterdir():
-                if not emotion_dir.is_dir():
-                    continue
-                candidate = emotion_dir / safe
-                if candidate.exists():
-                    return str(candidate)
+            if self._char_dir.exists():
+                for emotion_dir in self._char_dir.iterdir():
+                    if not emotion_dir.is_dir():
+                        continue
+                    candidate = emotion_dir / safe
+                    if candidate.exists():
+                        return str(candidate)
         except Exception:
             pass
+        user_candidate = self._user_char_dir / safe
+        if user_candidate.exists():
+            return str(user_candidate)
         return ""
 
-    def _resolve_character_asset(self, asset: str | None, emotion: str) -> str:
+    def _resolve_character_asset(self, asset: str | None, emotion: str, role: Optional[str]) -> str:
         name = str(asset or "").strip()
         if name and name not in {"__auto__", "__random__"}:
             custom = self._resolve_character_file(name)
             if custom:
                 self._last_character_path = custom
                 return custom
-        path = self._pick_character_path(emotion)
+        path = self._pick_character_path(emotion, role)
         return path
 
-    def _preview_character(self) -> str:
+    def _preview_character(self, role: Optional[str] = None) -> str:
         emotions = self._emotion_meta()
         if not emotions:
             return ""
         first_key = next(iter(emotions.keys()))
-        return self._random_character_data(first_key)
+        return self._random_character_data(first_key, role)
 
     def _bot_name(self) -> str:
         try:
@@ -738,7 +1066,11 @@ class ChuanHuaTongPlugin(Star):
         draw = ImageDraw.Draw(canvas)
 
         layers: list[tuple[int, dict[str, Any]]] = []
-        char_path = self._resolve_character_asset(layout.get("character_asset"), emotion)
+        char_path = self._resolve_character_asset(
+            layout.get("character_asset"),
+            emotion,
+            layout.get("character_role"),
+        )
         if char_path:
             layers.append((int(layout.get("character_z_index", 150)), {"kind": "character", "path": char_path}))
         layers.append((int(layout.get("textbox_z_index", 200)), {"kind": "textbox", "text": text}))
@@ -1026,6 +1358,9 @@ class ChuanHuaTongPlugin(Star):
                     web.get("/api/config", self._handle_get_layout),
                     web.post("/api/config", self._handle_update_layout),
                     web.post("/api/layout/reset", self._handle_reset_layout),
+                    web.get("/api/presets", self._handle_list_presets_api),
+                    web.post("/api/presets/save", self._handle_save_preset),
+                    web.post("/api/presets/load", self._handle_load_preset),
                     web.get("/api/preview-assets", self._handle_preview_assets),
                     web.post("/api/preview/generate", self._handle_generate_preview),
                     web.get("/api/components", self._handle_list_components_api),
@@ -1087,8 +1422,10 @@ class ChuanHuaTongPlugin(Star):
             "layout": layout,
             "components": self._list_components(),
             "characters": self._list_characters(),  # 添加立绘列表
+            "character_roles": self._list_character_roles(),
             "fonts": self._list_fonts(),
             "backgrounds": self._list_backgrounds(),
+            "presets": self._list_presets(),
             "bot_name": self._bot_name(),
             "emotion_sets": [
                 {
@@ -1109,9 +1446,10 @@ class ChuanHuaTongPlugin(Star):
 
     async def _handle_preview_assets(self, request: web.Request):
         await self._authorize(request)
+        role = str(request.query.get("role", "")).strip() or None
         preview = {
             "background": self._random_background_data(),
-            "character": self._preview_character(),
+            "character": self._preview_character(role),
         }
         return web.json_response(preview)
 
@@ -1160,41 +1498,117 @@ class ChuanHuaTongPlugin(Star):
         state = self._reset_layout_state()
         return web.json_response({"ok": True, "layout": state})
 
+    async def _handle_list_presets_api(self, request: web.Request):
+        await self._authorize(request)
+        return web.json_response({"presets": self._list_presets()})
+
+    async def _handle_save_preset(self, request: web.Request):
+        await self._authorize(request)
+        try:
+            body = await request.json()
+        except Exception:
+            raise web.HTTPBadRequest(text="invalid json")
+        name = str(body.get("name", "")).strip()
+        layout = body.get("layout")
+        if not name:
+            raise web.HTTPBadRequest(text="name required")
+        if not isinstance(layout, dict):
+            raise web.HTTPBadRequest(text="layout invalid")
+        record = self._save_preset(name, layout)
+        self._set_layout_state(record["layout"])
+        return web.json_response({
+            "ok": True,
+            "preset": {k: record.get(k) for k in ("name", "slug", "saved_at")},
+            "layout": record["layout"],
+            "presets": self._list_presets(),
+        })
+
+    async def _handle_load_preset(self, request: web.Request):
+        await self._authorize(request)
+        try:
+            body = await request.json()
+        except Exception:
+            raise web.HTTPBadRequest(text="invalid json")
+        identifier = str(body.get("name", "")).strip()
+        if not identifier:
+            raise web.HTTPBadRequest(text="name required")
+        record = self._load_preset(identifier)
+        if not record:
+            raise web.HTTPNotFound(text="preset not found")
+        self._set_layout_state(record["layout"])
+        return web.json_response({
+            "ok": True,
+            "preset": {k: record.get(k) for k in ("name", "slug", "saved_at")},
+            "layout": record["layout"],
+            "presets": self._list_presets(),
+        })
+
     async def _handle_list_components_api(self, request: web.Request):
         await self._authorize(request)
         return web.json_response({"components": self._list_components(), "fonts": self._list_fonts()})
 
     async def _handle_upload_component(self, request: web.Request):
         await self._authorize(request)
-        try:
-            payload = await request.json()
-        except Exception:
-            raise web.HTTPBadRequest(text="invalid json")
-        filename = str(payload.get("filename") or "").strip()
-        data = payload.get("data")
-        kind = str(payload.get("kind") or "component").lower()
-        if not filename or not data:
-            raise web.HTTPBadRequest(text="filename/data required")
+        content_type = request.content_type or ""
+        payload: dict[str, Any] = {}
+        binary_data: bytes | None = None
+        kind = "component"
+        emotion_from_form = ""
+        role_from_form = ""
+        if "multipart/form-data" in content_type:
+            form = await request.post()
+            file_field = form.get("file")
+            if not file_field or not getattr(file_field, "file", None):
+                raise web.HTTPBadRequest(text="file required")
+            filename = str(form.get("filename") or getattr(file_field, "filename", "") or "").strip()
+            kind = str(form.get("kind") or "component").lower()
+            emotion_from_form = str(form.get("emotion") or "").strip()
+            role_from_form = str(form.get("role") or "").strip()
+            binary_data = file_field.file.read()
+        else:
+            try:
+                payload = await request.json()
+            except Exception:
+                raise web.HTTPBadRequest(text="invalid json")
+            filename = str(payload.get("filename") or "").strip()
+            data = payload.get("data")
+            kind = str(payload.get("kind") or "component").lower()
+            if not filename or not data:
+                raise web.HTTPBadRequest(text="filename/data required")
+            try:
+                binary_data = base64.b64decode(str(data).split(",")[-1])
+            except Exception:
+                raise web.HTTPBadRequest(text="invalid data")
+            emotion_from_form = str((payload or {}).get("emotion") or "").strip()
+            role_from_form = str((payload or {}).get("role") or "").strip()
         if kind == "font":
             allowed = (".ttf", ".ttc", ".otf")
             target_dir = self._font_dir
+        elif kind == "character":
+            allowed = (".png", ".webp")
+            emotion_folder = self._sanitize_folder_name(emotion_from_form or "custom", "custom")
+            role_folder = self._sanitize_role_name(role_from_form or "general", "general")
+            target_dir = self._user_char_dir / role_folder / emotion_folder
+            target_dir.mkdir(parents=True, exist_ok=True)
         else:
             allowed = (".png", ".webp", ".gif")
             target_dir = self._component_dir
         if not filename.lower().endswith(allowed):
             raise web.HTTPBadRequest(text=f"only {'/'.join(allowed)} allowed")
         try:
-            content = base64.b64decode(data.split(",")[-1])
             safe_name = Path(filename).name
             target = target_dir / safe_name
+            if not binary_data:
+                raise ValueError("empty payload")
             with open(target, "wb") as fp:
-                fp.write(content)
+                fp.write(binary_data)
         except Exception as exc:
             raise web.HTTPBadRequest(text=f"upload failed: {exc}")
         return web.json_response({
             "ok": True,
             "components": self._list_components(),
             "fonts": self._list_fonts(),
+            "characters": self._list_characters(),
         })
 
     async def _handle_component_file(self, request: web.Request):
@@ -1236,8 +1650,21 @@ class ChuanHuaTongPlugin(Star):
             content_type = "font/ttf"
         return web.FileResponse(path, headers={"Content-Type": content_type})
 
+    if hasattr(filter, "on_message"):
+
+        @filter.on_message()
+        async def handle_message_events(
+            self,
+            event: AstrMessageEvent,
+            req: Optional[ProviderRequest] = None,
+        ):
+            await self._handle_preset_command(event, req)
+
     @filter.on_llm_request()
     async def inject_emotion_prompt(self, event: AstrMessageEvent, req: ProviderRequest):
+        handled = await self._handle_preset_command(event, req)
+        if handled:
+            return
         if not self._cfg_bool("enable_emotion_prompt", False):
             return
         emotions = self._emotion_meta()
@@ -1260,7 +1687,7 @@ class ChuanHuaTongPlugin(Star):
         if char_limit > 0:
             text_len = self._count_visible_chars(cleaned_text)
             if text_len > char_limit:
-                logger.debug("[传话筒] 文本长度 %s 超过阈值 %s，跳过渲染。", text_len, char_limit)
+                logger.info("[传话筒] 文本长度 %s 超过阈值 %s，跳过渲染。", text_len, char_limit)
                 event.set_result(event.plain_result(cleaned_text))
                 return
         image_path = await self._render_with_fallback(cleaned_text, emotion)
@@ -1302,3 +1729,77 @@ class ChuanHuaTongPlugin(Star):
             if text:
                 return text
         return ""
+
+    def _extract_user_plaintext(self, event: AstrMessageEvent, req: Optional[ProviderRequest]) -> str:
+        candidates: list[str] = []
+        for attr in ("plain_text", "text", "message", "content"):
+            val = getattr(event, attr, None)
+            if isinstance(val, str):
+                candidates.append(val)
+        chain = getattr(event, "message_chain", None)
+        if isinstance(chain, list):
+            parsed = self._chain_to_plain_text(chain)
+            if parsed:
+                candidates.append(parsed)
+        if req:
+            for attr in ("input_text", "user_input", "query", "prompt", "text"):
+                val = getattr(req, attr, None)
+                if isinstance(val, str):
+                    candidates.append(val)
+        for text in candidates:
+            if text and text.strip():
+                return text.strip()
+        return ""
+
+    def _switch_preset(self, target: str) -> tuple[bool, str, Optional[str]]:
+        normalized = str(target or "").strip()
+        if not normalized:
+            return False, "用法：/切换预设 预设名称（也支持 *切换预设）", None
+        record = self._load_preset(normalized)
+        if not record:
+            return False, f"未找到名为「{normalized}」的预设。", None
+        self._set_layout_state(record["layout"])
+        return True, f"已切换到预设「{record['name']}」。", record.get("name") or normalized
+
+    @staticmethod
+    def _parse_preset_command(text: str) -> tuple[bool, str]:
+        stripped = (text or "").strip()
+        if not stripped:
+            return False, ""
+        # 允许 / 或 * 前缀（兼容 AstrBot 指令与频道常用写法）
+        if stripped[0] in {"/", "*", "／", "＊"}:
+            stripped = stripped[1:].lstrip()
+        if not stripped.startswith("切换预设"):
+            return False, ""
+        remainder = stripped[len("切换预设"):].strip()
+        return True, remainder
+
+    async def _handle_preset_command(
+        self,
+        event: AstrMessageEvent,
+        req: Optional[ProviderRequest],
+    ) -> bool:
+        if hasattr(event, "is_stopped") and event.is_stopped():
+            return False
+        text = self._extract_user_plaintext(event, req)
+        if not text:
+            return False
+        stripped = text.strip()
+        matched, target = self._parse_preset_command(stripped)
+        if not matched:
+            return False
+        success, message, preset_name = self._switch_preset(target)
+        event.set_result(event.plain_result(message))
+        event.stop_event()
+        if success:
+            logger.info("[传话筒] 通过指令切换预设: %s", preset_name)
+        return True
+
+    @filter.command("切换预设")
+    async def command_switch_preset(self, event: AstrMessageEvent, *preset_tokens: str):
+        target = " ".join(preset_tokens).strip()
+        success, message, preset_name = self._switch_preset(target)
+        yield event.plain_result(message)
+        event.stop_event()
+        if success:
+            logger.info("[传话筒] 通过命令切换预设: %s", preset_name)

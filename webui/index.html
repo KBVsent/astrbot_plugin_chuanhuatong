@@ -237,14 +237,65 @@
     }
     button:active { transform: translateY(1px); }
     
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    
     .btn-primary { background: var(--accent-color); color: #000; }
     .btn-primary:hover { filter: brightness(1.1); }
     
     .btn-secondary { background: rgba(255,255,255,0.1); color: var(--text-main); }
     .btn-secondary:hover { background: rgba(255,255,255,0.15); }
     
+    .btn-ghost {
+      background: rgba(255,255,255,0.03);
+      color: var(--text-main);
+      border: 1px dashed rgba(255,255,255,0.2);
+    }
+    .btn-ghost:hover { background: rgba(255,255,255,0.07); }
+    
     .btn-danger { background: rgba(255, 71, 87, 0.15); color: var(--danger); border: 1px solid rgba(255, 71, 87, 0.3); }
     .btn-danger:hover { background: rgba(255, 71, 87, 0.25); }
+    
+    .preset-row { display:flex; gap:8px; margin-bottom:8px; }
+    .preset-status { font-size: 12px; color: var(--text-sub); margin-bottom: 6px; min-height: 16px; }
+    .preset-actions { display:flex; gap:8px; margin-bottom:8px; }
+    
+    .upload-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .upload-card {
+      background: rgba(255,255,255,0.02);
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 8px;
+      padding: 12px;
+    }
+    .upload-card h4 {
+      margin: 0 0 4px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-main);
+    }
+    .upload-card p {
+      margin: 0 0 8px;
+      font-size: 12px;
+      color: var(--text-sub);
+    }
+    .upload-controls {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .upload-controls input[type="file"] {
+      flex: 1;
+      min-width: 0;
+    }
+    .upload-select-row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
 
     /* 图层列表美化 */
     .layer-list {
@@ -271,11 +322,9 @@
     .toggle-row { display: flex; align-items: center; gap: 8px; margin-top: 4px; cursor: pointer; }
     .toggle-row span { font-size: 12px; color: var(--text-sub); }
 
-    /* 文件上传 */
-    .upload-box {
-      display: flex; gap: 4px; margin-bottom: 8px;
-    }
-    .upload-box input { font-size: 10px; }
+    /* （旧）文件上传样式保留备用 */
+    .preset-row select { flex:1; }
+    .helper-text { font-size:12px; color: var(--text-sub); margin-top:4px; }
 
     #status {
       padding: 8px 16px; font-size: 12px; text-align: center; color: var(--text-sub);
@@ -293,7 +342,7 @@
       <div style="display:flex; gap:10px;">
         <button class="btn-secondary" id="previewBtn">生成预览</button>
         <button class="btn-secondary" id="resetBtn">重置</button>
-        <button class="btn-primary" id="saveBtn">保存配置</button>
+        <button class="btn-primary" id="saveDefaultBtn">保存默认布局</button>
       </div>
     </header>
 
@@ -319,6 +368,23 @@
 
       <div class="panel">
         <div id="status"></div>
+        <div class="panel-section">
+          <div class="panel-header" onclick="this.parentElement.classList.toggle('collapsed')">预设管理</div>
+          <div class="panel-content">
+            <div class="preset-status" id="presetStatus">当前预设：未应用（编辑默认布局）</div>
+            <div class="preset-row">
+              <select id="presetSelect">
+                <option value="">选择一个预设</option>
+              </select>
+              <button class="btn-secondary" id="loadPresetBtn">应用预设</button>
+            </div>
+            <div class="preset-actions">
+              <button class="btn-ghost" id="overridePresetBtn" disabled>覆盖当前预设</button>
+              <button class="btn-primary" id="savePresetBtn">另存为预设</button>
+            </div>
+            <p class="helper-text">也可以在对话里发送“/切换预设 名称”快速切换。</p>
+          </div>
+        </div>
 
         <div class="panel-section">
           <div class="panel-header" onclick="this.parentElement.classList.toggle('collapsed')">画布与背景</div>
@@ -337,6 +403,11 @@
         <div class="panel-section collapsed">
           <div class="panel-header" onclick="this.parentElement.classList.toggle('collapsed')">立绘 (Character)</div>
           <div class="panel-content">
+            <label>角色分组</label>
+            <select id="characterRoleSelect" data-field="character_role">
+              <option value="__auto__">自动匹配（全部角色）</option>
+            </select>
+            <p class="helper-text">选择角色组后会自动记录在预设中，渲染时按情绪匹配该角色的差分。</p>
             <label>预览立绘</label>
             <select id="characterAssetSelect"></select>
             <div class="grid-2">
@@ -435,13 +506,44 @@
         <div class="panel-section collapsed">
           <div class="panel-header" onclick="this.parentElement.classList.toggle('collapsed')">资源上传</div>
           <div class="panel-content">
-            <div class="upload-box">
-              <input type="file" id="componentUpload" accept=".png,.webp,.gif">
-              <button class="btn-secondary" id="uploadComponentBtn">传组件</button>
-            </div>
-            <div class="upload-box">
-              <input type="file" id="fontUpload" accept=".ttf,.otf">
-              <button class="btn-secondary" id="uploadFontBtn">传字体</button>
+            <div class="upload-grid">
+              <div class="upload-card">
+                <h4>组件素材</h4>
+                <p>PNG / WebP / GIF，上传后可在图层组件中使用。</p>
+                <div class="upload-controls">
+                  <input type="file" id="componentUpload" accept=".png,.webp,.gif">
+                  <button class="btn-secondary" id="uploadComponentBtn">传组件</button>
+                </div>
+              </div>
+              <div class="upload-card">
+                <h4>字体文件</h4>
+                <p>TTF / OTF，上传后可在主文本框或图层字体下拉中选择。</p>
+                <div class="upload-controls">
+                  <input type="file" id="fontUpload" accept=".ttf,.otf">
+                  <button class="btn-secondary" id="uploadFontBtn">传字体</button>
+                </div>
+              </div>
+              <div class="upload-card">
+                <h4>立绘角色与情绪</h4>
+                <p>先选择角色分组（仅英文/数字/下划线/连字符），再选择情绪或自定义名称。</p>
+                <div class="upload-select-row">
+                  <select id="characterRoleUploadSelect" title="请选择立绘所属角色分组">
+                    <option value="">角色分组</option>
+                  </select>
+                  <input type="text" id="characterRoleCustom" placeholder="自定义角色 (仅英文)">
+                </div>
+                <div class="upload-select-row">
+                  <select id="characterEmotionSelect" title="请选择该立绘对应的情绪/差分">
+                    <option value="">情绪 / 差分</option>
+                  </select>
+                  <input type="text" id="characterEmotionCustom" placeholder="自定义情绪 (可选)">
+                </div>
+                <div class="upload-controls">
+                  <input type="file" id="characterUpload" accept=".png,.webp">
+                  <button class="btn-secondary" id="uploadCharacterBtn">传立绘</button>
+                </div>
+                <p class="helper-text">文件将保存到 data/.../characters/&lt;角色&gt;/&lt;情绪&gt;/</p>
+              </div>
             </div>
           </div>
         </div>
@@ -465,12 +567,27 @@
     const layerList = document.getElementById('layerList');
     const overlayEditor = document.getElementById('overlayEditor');
     const removeOverlayBtn = document.getElementById('removeOverlayBtn');
+    const presetSelect = document.getElementById('presetSelect');
+    const loadPresetBtn = document.getElementById('loadPresetBtn');
+    const savePresetBtn = document.getElementById('savePresetBtn');
+    const overridePresetBtn = document.getElementById('overridePresetBtn');
+    const presetStatus = document.getElementById('presetStatus');
+    const saveDefaultBtn = document.getElementById('saveDefaultBtn');
+    const characterRoleSelect = document.getElementById('characterRoleSelect');
+    const characterRoleUploadSelect = document.getElementById('characterRoleUploadSelect');
+    const characterRoleCustom = document.getElementById('characterRoleCustom');
+    const characterEmotionSelect = document.getElementById('characterEmotionSelect');
+    const characterEmotionCustom = document.getElementById('characterEmotionCustom');
+    const characterUploadInput = document.getElementById('characterUpload');
+    const componentUploadInput = document.getElementById('componentUpload');
+    const fontUploadInput = document.getElementById('fontUpload');
 
     // Inputs
     const inputs = {
       bgColor: document.getElementById('backgroundColorInput'),
       bgAsset: document.getElementById('backgroundAssetSelect'),
       charAsset: document.getElementById('characterAssetSelect'),
+      charRole: characterRoleSelect,
       textColor: document.getElementById('textColorInput'),
       bodyFont: document.getElementById('bodyFontSelect'),
       // Overlay inputs
@@ -495,18 +612,37 @@
     const authHeader = token ? { 'Authorization': `Bearer ${token}` } : {};
     const suffix = token ? `?token=${encodeURIComponent(token)}` : '';
 
+    function buildQueryUrl(path, extra = {}) {
+      const params = new URLSearchParams();
+      if(token) params.set('token', token);
+      Object.entries(extra || {}).forEach(([key, value]) => {
+        if(value !== undefined && value !== null && value !== '') {
+          params.set(key, value);
+        }
+      });
+      const qs = params.toString();
+      return qs ? `${path}?${qs}` : path;
+    }
+
     const state = {
       layout: {},
       overlays: [],
       components: [],
       fonts: [],
       backgrounds: [],
+      characters: [],
+      presets: [],
+      roles: [],
+      emotions: [],
       scale: 1,
       selectedOverlayId: null,
       activeLayerId: 'sys_box',
       dragging: null, // { type, id, startX, startY, initialParams }
       characterRatio: 1.8,
+      currentPresetSlug: '',
+      currentPresetName: '',
     };
+
 
     if(charPreview) {
       charPreview.addEventListener('load', () => {
@@ -525,6 +661,185 @@
       statusEl.textContent = msg;
       statusEl.style.color = err ? 'var(--danger)' : 'var(--success)';
       if(!err) setTimeout(() => statusEl.textContent = '', 3000);
+    }
+    const escapeHtml = (text = '') => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const formatCharacterLabel = (value) => {
+      if(value === '__auto__') return '自动';
+      if(value === '__random__') return '随机';
+      if(value && value.startsWith('user::')) {
+        const parts = value.split('::');
+        const role = parts.length > 1 ? (parts[1] || 'custom') : 'custom';
+        const emotion = parts.length > 2 ? (parts[2] || '') : '';
+        const file = parts.length > 3 ? (parts[3] || '') : (parts[parts.length - 1] || '');
+        const emotionPath = emotion ? `${emotion}/` : '';
+        return `用户/${role}/${emotionPath}${file || '未知'}`;
+      }
+      return value || '';
+    };
+    function renderPresetOptions() {
+      if(!presetSelect) return;
+      presetSelect.innerHTML = '<option value="">选择一个预设</option>';
+      state.presets.forEach(p => {
+        const option = document.createElement('option');
+        option.value = p.slug;
+        const label = p.name || p.slug;
+        option.textContent = p.slug === state.currentPresetSlug ? `${label}（当前）` : label;
+        presetSelect.appendChild(option);
+      });
+      presetSelect.value = state.currentPresetSlug || '';
+    }
+
+    function renderPresetStatus() {
+      if(!presetStatus) return;
+      if(state.currentPresetSlug) {
+        const label = state.currentPresetName || state.currentPresetSlug;
+        presetStatus.textContent = `当前预设：${label}（已绑定角色组）`;
+      } else {
+        presetStatus.textContent = '当前预设：未应用（正在编辑默认布局）';
+      }
+      if(overridePresetBtn) {
+        overridePresetBtn.disabled = !state.currentPresetSlug;
+      }
+    }
+
+    function setCurrentPreset(preset) {
+      state.currentPresetSlug = preset?.slug || '';
+      state.currentPresetName = preset?.name || '';
+      if(presetSelect) {
+        presetSelect.value = state.currentPresetSlug || '';
+      }
+      renderPresetStatus();
+    }
+
+    function renderRoleOptions() {
+      if(characterRoleSelect) {
+        const fragments = [];
+        fragments.push('<option value="__auto__">自动匹配（全部角色）</option>');
+        state.roles.forEach(role => {
+          const label = role.label || role.id;
+          fragments.push(`<option value="${escapeHtml(role.id)}">${escapeHtml(label)}</option>`);
+        });
+        characterRoleSelect.innerHTML = fragments.join('');
+        const currentRole = state.layout.character_role || '__auto__';
+        characterRoleSelect.value = currentRole;
+      }
+      if(characterRoleUploadSelect) {
+        characterRoleUploadSelect.innerHTML = '<option value="">角色分组</option>';
+        state.roles
+          .filter(role => role.source !== 'builtin')
+          .forEach(role => {
+            const option = document.createElement('option');
+            option.value = role.id;
+            option.textContent = role.label || role.id;
+            characterRoleUploadSelect.appendChild(option);
+          });
+      }
+    }
+
+    async function savePresetLayout(name, successLabel) {
+      const trimmed = (name || '').trim();
+      if(!trimmed) {
+        setStatus('预设名称不能为空', true);
+        return;
+      }
+      state.layout.text_overlays = state.overlays;
+      setStatus('正在保存预设...');
+      try {
+        const res = await fetch(`/api/presets/save${suffix}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeader },
+          body: JSON.stringify({ name: trimmed, layout: state.layout })
+        });
+        if(!res.ok) {
+          const msg = await res.text();
+          throw new Error(msg || '保存失败');
+        }
+        const data = await res.json();
+        state.layout = data.layout || state.layout;
+        if(!state.layout.character_role) state.layout.character_role = '__auto__';
+        if(state.layout.character_role !== '__auto__') {
+          state.layout.character_asset = '__auto__';
+        }
+        state.overlays = normalizeOverlays(state.layout.text_overlays);
+        state.presets = data.presets || state.presets;
+        setCurrentPreset(data.preset || { name: trimmed, slug: trimmed });
+        renderPresetOptions();
+        renderRoleOptions();
+        syncInputsToState();
+        renderLayerList();
+        renderCanvas();
+        updatePreviewImages();
+        const finalLabel = successLabel || `预设「${data?.preset?.name || trimmed}」保存成功`;
+        setStatus(finalLabel);
+      } catch(err) {
+        setStatus(err.message || '保存失败', true);
+      }
+    }
+
+    function normalizeOverlays(raw = []) {
+      return (raw || [])
+        .map(o => {
+          const normalizedType = o.type === 'converted_text' ? 'text' : (o.type || 'text');
+          return {
+            ...o,
+            type: normalizedType,
+            stroke_width: Number(o.stroke_width ?? 0) || 0,
+            stroke_color: o.stroke_color || '#000000'
+          };
+        })
+        .filter(o => ['text', 'image', 'glass'].includes(o.type));
+    }
+
+    function renderEmotionOptions() {
+      if(!characterEmotionSelect) return;
+      characterEmotionSelect.innerHTML = '<option value="">情绪 / 差分</option>';
+      state.emotions.forEach(item => {
+        const value = item.folder || item.key || '';
+        if(!value) return;
+        const label = item.key ? `${item.key} (${value})` : value;
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = label;
+        characterEmotionSelect.appendChild(option);
+      });
+    }
+
+    function updateEmotionInputState() {
+      if(!characterEmotionCustom) return;
+      const locked = characterEmotionSelect && characterEmotionSelect.value;
+      characterEmotionCustom.disabled = !!locked;
+      if(locked) {
+        characterEmotionCustom.value = '';
+        characterEmotionCustom.placeholder = '已选择情绪';
+      } else {
+        characterEmotionCustom.placeholder = '自定义情绪 (可选)';
+      }
+    }
+
+    function updateRoleInputState() {
+      if(!characterRoleCustom) return;
+      const locked = characterRoleUploadSelect && characterRoleUploadSelect.value;
+      characterRoleCustom.disabled = !!locked;
+      if(locked) {
+        characterRoleCustom.value = '';
+        characterRoleCustom.placeholder = '已选择角色';
+      } else {
+        characterRoleCustom.placeholder = '自定义角色 (仅英文)';
+      }
+    }
+
+    function resolveSelectedRoleSlug() {
+      const selected = characterRoleUploadSelect && characterRoleUploadSelect.value ? characterRoleUploadSelect.value.trim() : '';
+      const customEnabled = characterRoleCustom && !characterRoleCustom.disabled;
+      const custom = customEnabled ? (characterRoleCustom.value || '').trim() : '';
+      return custom || selected || '';
+    }
+
+    function resolveSelectedEmotionSlug() {
+      const selected = characterEmotionSelect && characterEmotionSelect.value ? characterEmotionSelect.value.trim() : '';
+      const customEnabled = characterEmotionCustom && !characterEmotionCustom.disabled;
+      const custom = customEnabled ? (characterEmotionCustom.value || '').trim() : '';
+      return custom || selected || '';
     }
 
     const getUrl = (name, type) => {
@@ -570,30 +885,38 @@
         const data = await res.json();
         
         state.layout = data.layout || {};
-        state.overlays = (state.layout.text_overlays || [])
-          .map(o => {
-            const normalizedType = o.type === 'converted_text' ? 'text' : (o.type || 'text');
-            return { 
-              ...o, 
-              type: normalizedType,
-              stroke_width: Number(o.stroke_width ?? 0) || 0,
-              stroke_color: o.stroke_color || '#000000'
-            };
-          })
-          .filter(o => ['text', 'image', 'glass'].includes(o.type));
+        state.overlays = normalizeOverlays(state.layout.text_overlays);
         state.components = data.components || [];
         state.characters = data.characters || [];  // 立绘列表
         state.fonts = data.fonts || [];
         state.backgrounds = data.backgrounds || [];
+        state.presets = data.presets || [];
+        state.roles = data.character_roles || [];
+        state.emotions = data.emotion_sets || [];
+        if(!state.layout.character_role) state.layout.character_role = '__auto__';
+        if(state.layout.character_role !== '__auto__') {
+          state.layout.character_asset = '__auto__';
+        }
         
         // Ensure defaults
         if(!state.layout.canvas_width) state.layout.canvas_width = 1280;
         if(!state.layout.canvas_height) state.layout.canvas_height = 720;
 
+        state.currentPresetSlug = '';
+        state.currentPresetName = '';
+        setCurrentPreset(null);
+
         populateSelects();
+        renderPresetOptions();
+        renderRoleOptions();
+        renderEmotionOptions();
+        updateRoleInputState();
+        updateEmotionInputState();
         syncInputsToState();
         renderCanvas();
         renderLayerList();
+        renderPresetStatus();
+        updatePreviewImages();
         setStatus('配置加载成功');
       } catch (e) {
         setStatus('加载失败: ' + e.message, true);
@@ -603,11 +926,17 @@
 
     function populateSelects() {
       const makeOpts = (arr, extra = []) => 
-        [...extra, ...arr].map(v => `<option value="${v}">${v}</option>`).join('');
+        [...extra, ...arr].map(v => {
+          const val = String(v);
+          return `<option value="${escapeHtml(val)}">${escapeHtml(val)}</option>`;
+        }).join('');
       
       inputs.bgAsset.innerHTML = makeOpts(state.backgrounds, ['__auto__', '__random__']);
-      // 立绘选择器只显示立绘列表，不显示组件
-      inputs.charAsset.innerHTML = makeOpts(state.characters, ['__auto__', '__random__']);
+      const charValues = ['__auto__', '__random__', ...state.characters];
+      inputs.charAsset.innerHTML = charValues.map(v => {
+        const val = String(v);
+        return `<option value="${escapeHtml(val)}">${escapeHtml(formatCharacterLabel(val))}</option>`;
+      }).join('');
       
       const fontOpts = makeOpts(state.fonts, ['']);
       inputs.bodyFont.innerHTML = fontOpts;
@@ -666,7 +995,7 @@
          } else if(bg === '__auto__' || bg === '__random__') {
            // 调用API获取随机背景预览（只在需要时调用）
            try {
-             const res = await fetch(`/api/preview-assets${suffix}`, { headers: authHeader });
+            const res = await fetch(buildQueryUrl('/api/preview-assets'), { headers: authHeader });
              if(res.ok) {
                const data = await res.json();
                if(data.background) {
@@ -684,7 +1013,13 @@
          } else if(char === '__auto__' || char === '__random__') {
            // 调用API获取随机立绘预览（只在需要时调用）
            try {
-             const res = await fetch(`/api/preview-assets${suffix}`, { headers: authHeader });
+            const roleParam = state.layout.character_role && state.layout.character_role !== '__auto__'
+              ? state.layout.character_role
+              : '';
+            const res = await fetch(
+              buildQueryUrl('/api/preview-assets', roleParam ? { role: roleParam } : {}),
+              { headers: authHeader }
+            );
              if(res.ok) {
                const data = await res.json();
                if(data.character) {
@@ -1308,21 +1643,132 @@
       overlayEditor.style.display = 'none';
     };
 
-    document.getElementById('saveBtn').onclick = async () => {
-       state.layout.text_overlays = state.overlays;
-       try {
-         const res = await fetch(`/api/config${suffix}`, {
-           method: 'POST',
-           headers: { 'Content-Type': 'application/json', ...authHeader },
-           body: JSON.stringify({ layout: state.layout })
-         });
-         if(res.ok) setStatus('保存成功！');
-         else throw new Error('保存失败');
-       } catch(e) { setStatus(e.message, true); }
-    };
+    if(saveDefaultBtn) {
+      saveDefaultBtn.onclick = async () => {
+        state.layout.text_overlays = state.overlays;
+        if(state.layout.character_role && state.layout.character_role !== '__auto__') {
+          state.layout.character_asset = '__auto__';
+          if(inputs.charAsset) inputs.charAsset.value = '__auto__';
+        }
+        setStatus('正在保存默认布局...');
+        try {
+          const res = await fetch(`/api/config${suffix}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeader },
+            body: JSON.stringify({ layout: state.layout })
+          });
+          if(!res.ok) {
+            const msg = await res.text();
+            throw new Error(msg || '保存失败');
+          }
+          await res.json();
+          setCurrentPreset(null);
+          renderPresetOptions();
+          setStatus('默认布局已保存');
+        } catch(e) {
+          setStatus(e.message || '保存失败', true);
+        }
+      };
+    }
+
+    if(savePresetBtn) {
+      savePresetBtn.onclick = async () => {
+        const presetName = window.prompt('请输入新的预设名称', state.currentPresetName || '');
+        if(presetName === null) {
+          setStatus('已取消保存');
+          return;
+        }
+        await savePresetLayout(presetName, undefined);
+      };
+    }
+
+    if(overridePresetBtn) {
+      overridePresetBtn.onclick = async () => {
+        if(!state.currentPresetSlug) {
+          setStatus('请先应用要覆盖的预设', true);
+          return;
+        }
+        await savePresetLayout(state.currentPresetName || state.currentPresetSlug, '当前预设已更新');
+      };
+    }
+    if(loadPresetBtn) {
+      loadPresetBtn.onclick = async () => {
+        const slug = presetSelect ? presetSelect.value : '';
+        if(!slug) {
+          setStatus('请先选择预设', true);
+          return;
+        }
+        try {
+          const res = await fetch(`/api/presets/load${suffix}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeader },
+            body: JSON.stringify({ name: slug })
+          });
+          if(!res.ok) {
+            const msg = await res.text();
+            throw new Error(msg || '加载失败');
+          }
+          const data = await res.json();
+          state.layout = data.layout || state.layout;
+          if(!state.layout.character_role) state.layout.character_role = '__auto__';
+          if(state.layout.character_role !== '__auto__') {
+            state.layout.character_asset = '__auto__';
+          }
+          state.overlays = normalizeOverlays(state.layout.text_overlays);
+          state.presets = data.presets || state.presets;
+          setCurrentPreset(data.preset || { name: data?.preset?.name || slug, slug });
+          renderPresetOptions();
+          renderRoleOptions();
+          syncInputsToState();
+          renderLayerList();
+          renderCanvas();
+          updatePreviewImages();
+          setStatus(`已切换到预设：${data?.preset?.name || slug}`);
+        } catch(err) {
+          setStatus(err.message || '加载预设失败', true);
+        }
+      };
+    }
     
-    document.getElementById('uploadComponentBtn').onclick = () => uploadFile('component', document.getElementById('componentUpload'));
-    document.getElementById('uploadFontBtn').onclick = () => uploadFile('font', document.getElementById('fontUpload'));
+    const uploadComponentBtn = document.getElementById('uploadComponentBtn');
+    const uploadFontBtn = document.getElementById('uploadFontBtn');
+    const uploadCharacterBtn = document.getElementById('uploadCharacterBtn');
+
+    if(uploadComponentBtn) {
+      uploadComponentBtn.onclick = () => uploadFile('component', componentUploadInput);
+    }
+    if(uploadFontBtn) {
+      uploadFontBtn.onclick = () => uploadFile('font', fontUploadInput);
+    }
+    if(uploadCharacterBtn) {
+      uploadCharacterBtn.onclick = () => {
+        const emotion = resolveSelectedEmotionSlug();
+        const role = resolveSelectedRoleSlug();
+        const extra = {};
+        if(emotion) extra.emotion = emotion;
+        if(role) extra.role = role;
+        uploadFile('character', characterUploadInput, extra);
+      };
+    }
+
+    if(characterEmotionSelect) {
+      characterEmotionSelect.addEventListener('change', updateEmotionInputState);
+    }
+    if(characterRoleUploadSelect) {
+      characterRoleUploadSelect.addEventListener('change', updateRoleInputState);
+    }
+    if(characterRoleSelect) {
+      characterRoleSelect.addEventListener('change', () => {
+        const selectedRole = characterRoleSelect.value || '__auto__';
+        state.layout.character_role = selectedRole;
+        if(selectedRole !== '__auto__') {
+          state.layout.character_asset = '__auto__';
+          if(inputs.charAsset) inputs.charAsset.value = '__auto__';
+        }
+        updateFromInputs();
+        updatePreviewImages();
+      });
+    }
 
     // 预览生成功能
     document.getElementById('previewBtn').onclick = async () => {
@@ -1383,24 +1829,40 @@
       }
     });
 
-    async function uploadFile(type, input) {
-       if(!input.files[0]) return setStatus('请选择文件', true);
-       const file = input.files[0];
-       const reader = new FileReader();
-       reader.onload = async (e) => {
-         try {
-           const res = await fetch(`/api/components/upload${suffix}`, {
-             method: 'POST',
-             headers: { 'Content-Type': 'application/json', ...authHeader },
-             body: JSON.stringify({ filename: file.name, data: e.target.result, kind: type })
-           });
-           if(res.ok) {
-             setStatus('上传成功，请刷新页面');
-             setTimeout(() => location.reload(), 1000);
-           }
-         } catch(e) { setStatus('上传错误', true); }
-       };
-       reader.readAsDataURL(file);
+    async function uploadFile(type, input, extra = {}) {
+      if(!input || !input.files || !input.files[0]) {
+        setStatus('请先选择要上传的文件', true);
+        return;
+      }
+      const file = input.files[0];
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('filename', file.name);
+      formData.append('kind', type);
+      Object.entries(extra || {}).forEach(([key, value]) => {
+        if(value !== undefined && value !== null && value !== '') {
+          formData.append(key, value);
+        }
+      });
+      setStatus('正在上传...');
+      try {
+        const res = await fetch(`/api/components/upload${suffix}`, {
+          method: 'POST',
+          headers: { ...authHeader },
+          body: formData
+        });
+        if(!res.ok) {
+          const msg = await res.text();
+          throw new Error(msg || '上传失败');
+        }
+        setStatus('上传成功，正在刷新');
+        setTimeout(() => location.reload(), 800);
+      } catch(err) {
+        console.error(err);
+        setStatus(`上传失败：${err?.message || err}`, true);
+      } finally {
+        input.value = '';
+      }
     }
 
     // Init

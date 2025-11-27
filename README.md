@@ -4,7 +4,7 @@
 <img width="200" height="200" alt="image" src="https://github.com/user-attachments/assets/6af41d2d-f0d1-4be5-a656-b1fe748c8a5d" />
 
 ## 公网环境请注意配置token！  点个star谢谢喵
-> **当前版本：v1.7.0**
+> **当前版本：v1.8.0**
 
 ![views](https://count.getloli.com/get/@astrbotchuanhuatong?theme=booru-jaypee)
 
@@ -267,6 +267,11 @@ AstrBot/data/plugin_data/astrbot_plugin_chuanhuatong/
 
 
 ## 更新日志
+
+### v1.8.0
+- **标签完全清洗**：移除 `&xxx&` 后会自动剔除多余换行，渲染正文不再下移，同时能正确匹配对应情绪立绘。
+- **情绪配置独立持久化**：插件数据目录新增 `emotion_sets.json`，从此不再依赖初始配置，重启也能保留自定义标签。
+- **WebUI 情绪管理面板**：可视化新增/删除/启用情绪标签，一键保存或恢复默认配置，操作后即刻生效。
 
 ### v1.7.0
 - 修复指令问题，ai编程导致的

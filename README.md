@@ -1,6 +1,8 @@
 <div align="center">
 
 #  ✨ 传话筒（astrbot_plugin_chuanhuatong）✨
+<img width="729" height="729" alt="image" src="https://github.com/user-attachments/assets/6af41d2d-f0d1-4be5-a656-b1fe748c8a5d" />
+
 ## 公网环境请注意配置token！
 > **当前版本：v1.7.0**
 
@@ -253,7 +255,7 @@ AstrBot/data/plugin_data/astrbot_plugin_chuanhuatong/
 
 ---
 
-## 内置《魔法少女的魔女审判》全角色预设下载
+## 插件内置《魔法少女的魔女审判》全角色预设下载
 **请到 https://github.com/bvzrays/astrbot_plugin_chuanhuatong-Magical-Girl-Witch-Trials 下载模板和立绘**
 <img width="1600" height="600" alt="e44d70c03555daa6057b2ac702bd3d43" src="https://github.com/user-attachments/assets/f9522646-463c-4879-b174-480509711e02" />
 <img width="1600" height="600" alt="c74f77dfb7e1ce3180f206da0e8c8a22" src="https://github.com/user-attachments/assets/c21df64c-d5f1-4eb0-8728-dc36a5ceee3c" />
@@ -274,21 +276,16 @@ AstrBot/data/plugin_data/astrbot_plugin_chuanhuatong/
 ## 更新日志
 
 ### v1.7.0
-- 修复指令问题：优化命令符处理逻辑，确保框架配置的命令符正常工作
+- 修复指令问题，确保框架配置的命令符正常工作
 - 修复预设导入后立绘错乱：加载预设后自动刷新缓存和角色列表，确保立绘正确显示
 - 修复表情标签清理：在 `on_decorating_result` 钩子中清理 `&xxx&` 格式的情绪标签，确保从文本和对话历史中完全移除
-- 修复换行符保留：优化文本清理逻辑，只清理多余空格，保留所有换行符
-- 修复插件冲突：调整事件钩子优先级，确保与 `continuous_message` 等插件兼容
-- 优化对话历史更新：确保保存到历史的文本是清理后的版本，不包含情绪标签
+- 修复插件冲突：调整事件钩子优先级，确保与 `continuous_message` 等插件兼容，若仍有冲突可自行修改优先级
 
 ### v1.6.0
-- 预设管理面板新增状态提示与“覆盖当前 / 另存为”按钮，应用或保存后会自动刷新角色组与立绘预览。
-- `/切换预设` 指令兼容 `*切换预设` 等写法，聊天内切换更顺手。
-- “资源上传”区改为卡片式布局，立绘上传时可同时指定角色分组与情绪，流程提示更清晰。
-- README 更新至 v1.6.0，补充新版交互说明。
+- 预设管理面板新增状态提示与“覆盖当前 / 另存为”按钮，应用或保存后会自动刷新角色组与立绘预览
+- “资源上传”区改为卡片式布局，立绘上传时可同时指定角色分组与情绪
 
 ### v1.5.0
-- WebUI 上传立绘支持「情绪 / 差分」选择框，自动读取 `emotion_sets` 并可填写自定义目录。
-- 新增“角色分组”概念，目录结构升级为 `characters/<角色>/<情绪>/文件`；预设可独立选择角色组，渲染时会按角色 + 情绪匹配差分。
-- 用户立绘会在“预览立绘”选择器中按 `用户/角色/情绪/文件` 展示，便于定位。
-- README、元数据同步到 v1.5.0，文档补充差分上传与目录结构说明。
+- WebUI 上传立绘支持「情绪 / 差分」选择框，自动读取 `emotion_sets` 并可填写自定义目录
+- 新增“角色分组”概念，目录结构升级为 `characters/<角色>/<情绪>/文件`；预设可独立选择角色组，渲染时会按角色 + 情绪匹配差分
+- 用户立绘会在“预览立绘”选择器中按 `用户/角色/情绪/文件` 展示，便于定位

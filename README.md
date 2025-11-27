@@ -4,9 +4,7 @@
 
 > **当前版本：v1.7.0**
 
-![GitHub Repo stars](https://img.shields.io/github/stars/bvzrays/astrbot_plugin_chuanhuatong?style=for-the-badge&logo=github&logoColor=white&color=FF6B9D)
-![GitHub forks](https://img.shields.io/github/forks/bvzrays/astrbot_plugin_chuanhuatong?style=for-the-badge&logo=github&logoColor=white&color=4ECDC4)
-
+![views](https://count.getloli.com/get/@astrbotneteasemusic?theme=booru-jaypee)<br>
 
 </div>
 

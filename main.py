@@ -47,7 +47,7 @@ class EmotionMeta:
     "astrbot_plugin_chuanhuatong",
     "bvzrays",
     "传话筒：将 Bot 的文字回复渲染为 Gal 风立绘对话框",
-    "1.7.0",
+    "1.8.0",
     "https://github.com/bvzrays/astrbot_plugin_chuanhuatong",
 )
 class ChuanHuaTongPlugin(Star):
@@ -65,7 +65,7 @@ class ChuanHuaTongPlugin(Star):
         {"key": "sad", "folder": "sad", "label": "低落", "color": "#7DA1FF", "enabled": True},
         {"key": "shy", "folder": "shy", "label": "害羞", "color": "#F9C5D1", "enabled": True},
         {"key": "surprise", "folder": "surprise", "label": "惊讶", "color": "#F5E960", "enabled": True},
-        {"key": "angry", "folder": "sad", "label": "生气", "color": "#FF8A8A", "enabled": True},
+        {"key": "angry", "folder": "angry", "label": "生气", "color": "#FF8A8A", "enabled": True},
     ]
 
     DEFAULT_PROMPT_TEMPLATE = (
@@ -303,6 +303,7 @@ class ChuanHuaTongPlugin(Star):
         self._current_preset_file = self._data_dir / "current_preset.json"
         self._current_preset_meta: dict[str, Any] = self._load_current_preset_meta()
         self._layout_file = self._data_dir / "layout_state.json"
+        self._emotion_file = self._data_dir / "emotion_sets.json"
         self._layout_lock = asyncio.Lock()
         self._layout_state = self._load_layout_state()
         self._web_runner: Optional[web.AppRunner] = None
@@ -311,6 +312,7 @@ class ChuanHuaTongPlugin(Star):
         self._web_lock = asyncio.Lock()
         self._render_semaphore = asyncio.Semaphore(3)
         self._cached_emotions: Dict[str, EmotionMeta] = {}
+        self._emotion_records: list[dict[str, Any]] = []
         self._ensure_prompt_template()
         self._last_background_path: str = ""
         self._last_character_path: str = ""
@@ -784,13 +786,66 @@ class ChuanHuaTongPlugin(Star):
         except Exception:
             return []
 
+    def _read_emotion_file(self) -> Optional[list[dict[str, Any]]]:
+        if not self._emotion_file.exists():
+            return None
+        try:
+            data = json.loads(self._emotion_file.read_text(encoding="utf-8"))
+            return data if isinstance(data, list) else None
+        except Exception:
+            logger.debug("[传话筒] 读取情绪配置失败，使用默认配置。", exc_info=True)
+            return None
+
+    def _write_emotion_file(self, records: list[dict[str, Any]]):
+        try:
+            self._emotion_file.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as exc:
+            logger.error("[传话筒] 写入情绪配置失败: %s", exc)
+
+    def _normalize_emotion_records(self, records: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+        normalized: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        source = records or []
+        for item in source:
+            if not isinstance(item, dict):
+                continue
+            raw_key = str(item.get("key") or "").strip()
+            key = re.sub(r"[^0-9a-zA-Z_]+", "_", raw_key).lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            folder = self._sanitize_folder_name(str(item.get("folder") or key), key or "neutral")
+            label = str(item.get("label") or raw_key or key).strip() or key
+            color = str(item.get("color") or "#FFFFFF").strip() or "#FFFFFF"
+            enabled = bool(item.get("enabled", True))
+            normalized.append({
+                "key": key,
+                "folder": folder,
+                "label": label,
+                "color": color,
+                "enabled": enabled,
+            })
+        if not normalized:
+            normalized = copy.deepcopy(self.DEFAULT_EMOTIONS)
+        if not any(entry.get("enabled") for entry in normalized):
+            normalized[0]["enabled"] = True
+        return normalized
+
+    def _persist_emotion_sets(self, records: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+        normalized = self._normalize_emotion_records(records)
+        self._write_emotion_file(normalized)
+        return normalized
+
     def _load_emotion_sets(self) -> Dict[str, EmotionMeta]:
-        src = self.cfg().get("emotion_sets")
-        records: list[dict[str, Any]] = []
-        if isinstance(src, list):
-            records = src
-        else:
-            records = self.DEFAULT_EMOTIONS
+        records = self._read_emotion_file()
+        if records is None:
+            src = self.cfg().get("emotion_sets")
+            if isinstance(src, list) and src:
+                records = src
+            else:
+                records = copy.deepcopy(self.DEFAULT_EMOTIONS)
+        records = self._persist_emotion_sets(records)
+        self._emotion_records = records
         prepared: Dict[str, EmotionMeta] = {}
         enabled_keys: list[str] = []
         for item in records:
@@ -833,6 +888,11 @@ class ChuanHuaTongPlugin(Star):
             self._cached_emotions = self._load_emotion_sets()
         return self._cached_emotions.copy()
 
+    def _emotion_payload(self) -> list[dict[str, Any]]:
+        if not self._emotion_records:
+            self._emotion_meta()
+        return copy.deepcopy(self._emotion_records)
+
     def _remove_emotion_tags(self, text: str) -> str:
         """移除文本中的情绪标签（&xxx&格式），参考 meme_manager_lite 的实现"""
         if not text:
@@ -845,6 +905,10 @@ class ChuanHuaTongPlugin(Star):
         # 清理行首行尾的空格（但保留换行符结构）
         lines = cleaned.split("\n")
         cleaned_lines = [line.strip() for line in lines]
+        while cleaned_lines and not cleaned_lines[0]:
+            cleaned_lines.pop(0)
+        while cleaned_lines and not cleaned_lines[-1]:
+            cleaned_lines.pop()
         cleaned = "\n".join(cleaned_lines)
         return cleaned
 
@@ -1455,6 +1519,8 @@ class ChuanHuaTongPlugin(Star):
                     web.get("/api/backgrounds/raw/{name}", self._handle_background_file),
                     web.get("/api/characters/raw/{name}", self._handle_character_file),
                     web.get("/api/fonts/raw/{name}", self._handle_font_file),
+                    web.post("/api/emotions/save", self._handle_save_emotions),
+                    web.post("/api/emotions/reset", self._handle_reset_emotions),
                 ]
             )
             self._web_app = app
@@ -1503,6 +1569,7 @@ class ChuanHuaTongPlugin(Star):
     async def _handle_get_layout(self, request: web.Request):
         await self._authorize(request)
         emotions = self._emotion_meta()
+        emotion_payload = self._emotion_payload()
         layout = self._layout()
         payload = {
             "layout": layout,
@@ -1513,16 +1580,7 @@ class ChuanHuaTongPlugin(Star):
             "backgrounds": self._list_backgrounds(),
             "presets": self._list_presets(),
             "bot_name": self._bot_name(),
-            "emotion_sets": [
-                {
-                    "key": key,
-                    "folder": meta.folder,
-                    "label": meta.label,
-                    "color": meta.color,
-                    "enabled": meta.enabled,
-                }
-                for key, meta in emotions.items()
-            ],
+            "emotion_sets": emotion_payload,
             "canvas": {
                 "width": layout["canvas_width"],
                 "height": layout["canvas_height"],
@@ -1751,6 +1809,33 @@ class ChuanHuaTongPlugin(Star):
             content_type = "font/ttf"
         return web.FileResponse(path, headers={"Content-Type": content_type})
 
+    async def _handle_save_emotions(self, request: web.Request):
+        await self._authorize(request)
+        try:
+            body = await request.json()
+        except Exception:
+            raise web.HTTPBadRequest(text="invalid json")
+        records = body.get("emotions")
+        if not isinstance(records, list):
+            raise web.HTTPBadRequest(text="emotions required")
+        normalized = self._persist_emotion_sets(records)
+        self._emotion_records = normalized
+        self._cached_emotions.clear()
+        return web.json_response({
+            "ok": True,
+            "emotion_sets": self._emotion_payload(),
+        })
+
+    async def _handle_reset_emotions(self, request: web.Request):
+        await self._authorize(request)
+        normalized = self._persist_emotion_sets(copy.deepcopy(self.DEFAULT_EMOTIONS))
+        self._emotion_records = normalized
+        self._cached_emotions.clear()
+        return web.json_response({
+            "ok": True,
+            "emotion_sets": self._emotion_payload(),
+        })
+
     if hasattr(filter, "on_message"):
 
         @filter.on_message(priority=-10)  # 降低优先级，确保在其他插件之后处理
@@ -1837,17 +1922,16 @@ class ChuanHuaTongPlugin(Star):
             return
         
         # 提取完整文本用于判断和渲染
-        full_text_parts = []
+        raw_text_parts = []
         new_chain = []
         has_non_text = False
         
         for item in chain:
             if isinstance(item, PLAIN_COMPONENT_TYPES):
                 original_text = getattr(item, "text", "") or ""
+                raw_text_parts.append(original_text)
                 cleaned_text = self._remove_emotion_tags(original_text)
-                full_text_parts.append(cleaned_text)
                 if cleaned_text:
-                    # 创建新的文本组件（参考 meme_manager_lite 的方式）
                     new_item = type(item)(cleaned_text)
                     new_chain.append(new_item)
             else:
@@ -1858,14 +1942,12 @@ class ChuanHuaTongPlugin(Star):
         result.chain = new_chain
         
         # 如果只有文本组件，尝试渲染
-        if not has_non_text and full_text_parts:
-            full_text = "".join(full_text_parts)
+        if not has_non_text and raw_text_parts:
+            raw_full_text = "".join(raw_text_parts)
+            emotion, cleaned_full_text = self._emotion_from_text(raw_full_text)
+            full_text = cleaned_full_text.strip()
             if full_text:
-                # 更新对话历史
                 await self._update_conversation_history(event, full_text)
-                
-                # 提取情绪
-                emotion, _ = self._emotion_from_text(full_text)
                 
                 # 检查字符限制
                 char_limit = int(self.cfg().get("render_char_threshold", 60) or 0)

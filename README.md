@@ -4,7 +4,8 @@
 
 将 AstrBot 的纯文本回复转换成带立绘的 GalGame 风聊天框图片，支持情绪差分、多层文本、拖拽式 WebUI 布局与自定义组件模板。
 
-【这里放整体效果演示图片】
+<img width="627" height="703" alt="image" src="https://github.com/user-attachments/assets/833d053d-383d-4e6b-941d-4936869d3e4c" />
+
 
 ---
 
@@ -52,7 +53,7 @@
   - 完全基于本地 Pillow 渲染，无需浏览器 / Playwright。
   - 如渲染出错会自动回退为纯文本发送，保证消息不丢失。
 
-【这里放 WebUI 布局编辑界面截图】
+<img width="1920" height="1312" alt="image" src="https://github.com/user-attachments/assets/d313b111-94f6-42bd-8976-122f23d46d82" />
 
 ---
 
@@ -70,7 +71,8 @@
    - 默认 WebUI 监听：`http://127.0.0.1:18765`
    - 可在配置中修改 `webui_host` / `webui_port`，请确保端口未被其他程序占用。
 
-【这里放 AstrBot 插件列表中显示本插件的截图】
+<img width="1004" height="1079" alt="image" src="https://github.com/user-attachments/assets/f1af9e28-2d45-4a4b-9c51-1dfbdbd746cd" />
+
 
 ---
 
@@ -109,7 +111,8 @@
     - `AstrBot/data/plugin_data/astrbot_plugin_chuanhuatong/layout_state.json`
   - 重启 AstrBot 或重新加载插件不会丢失布局；点击“重置布局”可回到插件内置的默认模板。
 
-【这里放 WebUI 文本样式编辑区域截图】
+<img width="339" height="198" alt="image" src="https://github.com/user-attachments/assets/bb26cd55-6222-4ce5-a97a-c7f29159e0df" />
+
 
 ---
 
@@ -141,7 +144,8 @@
   - 如果文本中没有出现任何已知标签，则使用配置项 `default_emotion`。
   - 若 `default_emotion` 无法匹配到有效目录，会使用第一个已启用的情绪作为回退。
 
-【这里放不同情绪立绘对比的拼图截图】
+<img width="614" height="668" alt="image" src="https://github.com/user-attachments/assets/638262b1-ce88-44f8-a4bd-2111edafda76" />
+
 
 ---
 
@@ -174,7 +178,8 @@ astrbot_plugin_chuanhuatong/
     - `AstrBot/data/plugins/astrbot_plugin_chuanhuatong/zujian/名称框.png`
   - 这样默认布局中的组件图层就能直接引用这些图片，第一次打开 WebUI 即可看到完整模板布局。
 
-【这里放资源目录结构（资源管理器截图）】
+<img width="581" height="185" alt="image" src="https://github.com/user-attachments/assets/5a31444a-9991-4384-9b22-2afe4df0d7d0" />
+
 
 ---
 
@@ -196,7 +201,8 @@ AstrBot/data/plugin_data/astrbot_plugin_chuanhuatong/
 - 直接将组件 / 立绘 / 字体文件放入上述目录（及其子目录）也会被 WebUI 识别。
 - 用户上传的组件与字体会与插件内置的文件一起出现在下拉列表中，可在 WebUI 中统一管理。
 
-【这里放 data 目录结构截图】
+<img width="742" height="340" alt="image" src="https://github.com/user-attachments/assets/b9e36b2d-dd5f-4f8f-80e3-510b9be906cd" />
+
 
 ---
 
@@ -237,9 +243,28 @@ AstrBot/data/plugin_data/astrbot_plugin_chuanhuatong/
 - 未检测到背景或立绘文件时，会自动降级为纯背景 / 无立绘模式，保证消息仍可正常发送。
 - 若在其他插件中也修改了 `event.get_result()` 或拦截消息，请注意插件执行顺序以及 `event.stop_event()` 的使用，避免互相覆盖。
 
-【这里放实际聊天窗口中渲染结果的截图】
+<img width="1280" height="480" alt="c8a942fee1751694aa04c49771e204a0_720" src="https://github.com/user-attachments/assets/26b138ee-f4a3-47a4-a660-4b5b087a77fc" />
+
 
 ---
+
+## 内置《魔法少女的魔女审判》全角色预设下载
+请到 https://github.com/bvzrays/astrbot_plugin_chuanhuatong-Magical-Girl-Witch-Trials 下载
+<img width="1600" height="600" alt="e44d70c03555daa6057b2ac702bd3d43" src="https://github.com/user-attachments/assets/f9522646-463c-4879-b174-480509711e02" />
+<img width="1600" height="600" alt="c74f77dfb7e1ce3180f206da0e8c8a22" src="https://github.com/user-attachments/assets/c21df64c-d5f1-4eb0-8728-dc36a5ceee3c" />
+<img width="1600" height="600" alt="ce38ffc9fb01a02142c8c8453b69e57f" src="https://github.com/user-attachments/assets/5150af2b-dc5b-465b-9132-6350e6eaedd6" />
+<img width="1600" height="600" alt="1417f5d131b57a2ccb09278b056b84ce" src="https://github.com/user-attachments/assets/dbb16290-521f-4158-845b-c0a0c4c10fba" />
+<img width="1600" height="600" alt="4907720c7bbe1148dfd1aaeb1f02ef45" src="https://github.com/user-attachments/assets/0bdcb8d9-33b4-4998-b245-95741317864c" />
+<img width="1600" height="600" alt="cf0b0ba02c2abc855ca2df975a1f14b2" src="https://github.com/user-attachments/assets/3275d0d5-70b9-49b7-88bb-61dd79ff1449" />
+<img width="1600" height="600" alt="ec8bd6ccf0f9dd57472b3c92a0ff84fb" src="https://github.com/user-attachments/assets/acb17108-22a4-4c04-8b9e-41565be5d9d0" />
+<img width="1600" height="600" alt="6e8d4c78c0d9ed7825e2978ca1040b7c" src="https://github.com/user-attachments/assets/4598afc5-a469-4a46-bc4c-00a050699fb3" />
+<img width="1600" height="600" alt="16a36d6b7e539163c2a88f24eca77001" src="https://github.com/user-attachments/assets/395ec728-fd14-4766-b486-0d3c3f4a1d8e" />
+<img width="1600" height="600" alt="48e77c8ce9ff43b3052eec5dfbd2d3bc" src="https://github.com/user-attachments/assets/45279711-1c03-476d-ae38-8468270f7d89" />
+<img width="1600" height="600" alt="909cadd9d92025668c9954bcf1413d7d" src="https://github.com/user-attachments/assets/0242f3cb-f3ec-4f00-9717-cbea0917a538" />
+<img width="1600" height="600" alt="60e499029f905c74da834b0d1b0a6fc0" src="https://github.com/user-attachments/assets/06839ac8-877d-495d-9116-196cfd0fa7a5" />
+<img width="1600" height="600" alt="4aa64bbae0dd16fd5d644355d553a370" src="https://github.com/user-attachments/assets/185bf155-1f2e-4102-b2e9-d6dece552472" />
+<img width="1600" height="600" alt="416687fb4a0c077dd964d599af26a92a" src="https://github.com/user-attachments/assets/5e696af3-b04c-4fe9-be0a-e1dd5a3e5627" />
+
 
 ## 更新日志
 

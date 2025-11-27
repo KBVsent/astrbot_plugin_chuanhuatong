@@ -32,36 +32,37 @@
 - **统一图片渲染**
   - 拦截 Bot 输出的文本，在发送前统一转为图片，渲染失败自动降级为原始文本。
   - 支持渲染字符阈值：过长文本自动退回纯文本，避免文字溢出。
+<img width="573" height="50" alt="image" src="https://github.com/user-attachments/assets/e1a77562-1f65-445c-9979-30166b128b37" />
 
 - **自动背景 / 立绘管理**
   - 自动从 `background/`、`renwulihui/<情绪>/` 等目录中随机抽取素材。
   - 支持 `__auto__` / `__random__` 模式，也可以在 WebUI 中指定固定立绘。
+<img width="580" height="534" alt="image" src="https://github.com/user-attachments/assets/b8d098bb-4a42-41f7-b53e-f6f8b10896d4" />
 
 - **情绪标签驱动立绘**
   - 在回答中插入 `&happy&`、`&shy&`、`&angry&` 等标签即可切换对应情绪立绘。
   - 情绪集合、对应子目录、颜色等由 `_conf_schema.json` 的 `emotion_sets` 统一管理。
+<img width="546" height="387" alt="image" src="https://github.com/user-attachments/assets/e1e7b480-cc8a-46ab-b1db-70bc2b005714" />
 
 - **WebUI 布局编辑**
   - 所见即所得编辑画布：可拖拽 / 缩放主文本框、角色立绘、文本层、图片组件、毛玻璃层。
   - 图层列表类似 Photoshop：支持调整 z-index、透明度、可见性、删除等。
   - 文本层支持自定义字体、字号、颜色、**描边宽度 / 颜色**，边框可拖拽控制自动换行与字体自适应。
+<img width="2379" height="1150" alt="image" src="https://github.com/user-attachments/assets/a70db85c-0f2c-4f86-a4d6-56fbfed1acda" />
 
 - **多预设保存 / 一键切换**
   - WebUI 保存时可输入名称，自动写入 `data/.../presets/*.json`，方便管理不同剧本皮肤。
   - 在任何对话中发送 `/切换预设 预设名`（兼容 `*切换预设` 写法），即可即时切换到指定布局，无需离开聊天窗口。
   - 预设管理面板内置“覆盖当前”“另存为”按钮，实时刷新角色组与立绘预览，所见即所得。
-
-- **立绘角色分组 + 差分**
-  - WebUI 上传立绘前，可先选择“角色分组”，再选择情绪/差分目录，或分别填写自定义名称。
-  - 插件会自动落盘到 `plugin_data/.../characters/<角色>/<情绪>/`，预设中可指定某个角色组，渲染时会根据情绪标签自动切换该角色组下的对应差分。
+<img width="414" height="228" alt="image" src="https://github.com/user-attachments/assets/333147a2-d4e8-43eb-befe-18a5a6c7cadf" />
 
 - **组件与毛玻璃模板**
   - 可以将对话框外框、按钮、角标等作为“组件图层”摆放。
   - 毛玻璃效果作为独立图层存在，可与主文本框分离，放在任意位置。
+<img width="329" height="351" alt="image" src="https://github.com/user-attachments/assets/a86876a1-b501-4758-98ef-5feefc83a597" />
 
 - **回退**
   - 如渲染出错会自动回退为纯文本发送，保证消息不丢失。
-
 <img width="1920" height="1312" alt="image" src="https://github.com/user-attachments/assets/d313b111-94f6-42bd-8976-122f23d46d82" />
 
 ---

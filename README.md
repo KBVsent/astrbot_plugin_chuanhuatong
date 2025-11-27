@@ -13,7 +13,8 @@
 
 将 AstrBot 的纯文本回复转换成带立绘的 GalGame 风聊天框图片，支持情绪差分、多层文本、拖拽式 WebUI 布局与自定义组件模板。
 
-<img width="525" height="238" alt="image" src="https://github.com/user-attachments/assets/b9a86fcb-8621-4191-941f-55013090d118" />
+<img width="1657" height="694" alt="image" src="https://github.com/user-attachments/assets/db98f4b4-ee8c-42de-807c-52c84e5ce3cc" />
+
 
 
 ---

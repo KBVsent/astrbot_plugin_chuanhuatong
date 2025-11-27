@@ -63,7 +63,6 @@
 
 - **回退**
   - 如渲染出错会自动回退为纯文本发送，保证消息不丢失。
-<img width="1920" height="1312" alt="image" src="https://github.com/user-attachments/assets/d313b111-94f6-42bd-8976-122f23d46d82" />
 
 ---
 

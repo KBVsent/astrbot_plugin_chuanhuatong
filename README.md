@@ -249,7 +249,7 @@ AstrBot/data/plugin_data/astrbot_plugin_chuanhuatong/
 ---
 
 ## 内置《魔法少女的魔女审判》全角色预设下载
-请到 https://github.com/bvzrays/astrbot_plugin_chuanhuatong-Magical-Girl-Witch-Trials 下载
+**请到 https://github.com/bvzrays/astrbot_plugin_chuanhuatong-Magical-Girl-Witch-Trials 下载模板和立绘**
 <img width="1600" height="600" alt="e44d70c03555daa6057b2ac702bd3d43" src="https://github.com/user-attachments/assets/f9522646-463c-4879-b174-480509711e02" />
 <img width="1600" height="600" alt="c74f77dfb7e1ce3180f206da0e8c8a22" src="https://github.com/user-attachments/assets/c21df64c-d5f1-4eb0-8728-dc36a5ceee3c" />
 <img width="1600" height="600" alt="ce38ffc9fb01a02142c8c8453b69e57f" src="https://github.com/user-attachments/assets/5150af2b-dc5b-465b-9132-6350e6eaedd6" />

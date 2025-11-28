@@ -46,7 +46,7 @@ class EmotionMeta:
 @register(
     "astrbot_plugin_chuanhuatong",
     "bvzrays",
-    "传话筒：将 Bot 的文字回复渲染为 Gal 风立绘对话框，支持《魔法少女的魔女审判》全人物预设",
+    "传话筒：将 Bot 的文字回复渲染为 Gal 风立绘对话框",
     "1.8.0",
     "https://github.com/bvzrays/astrbot_plugin_chuanhuatong",
 )
@@ -1514,7 +1514,9 @@ class ChuanHuaTongPlugin(Star):
         async with self._web_lock:
             if self._web_runner:
                 return
-            host = str(self.cfg().get("webui_host", "127.0.0.1"))
+            # 默认使用 0.0.0.0 以支持 Docker/远程访问，用户可在配置中改为 127.0.0.1 限制本地访问
+            default_host = "0.0.0.0"
+            host = str(self.cfg().get("webui_host", default_host))
             port = int(self.cfg().get("webui_port", 18765))
             app = web.Application()
             app.add_routes(
@@ -1543,7 +1545,21 @@ class ChuanHuaTongPlugin(Star):
             await self._web_runner.setup()
             self._web_site = web.TCPSite(self._web_runner, host, port)
             await self._web_site.start()
-            logger.info("[传话筒] WebUI 已启动: http://%s:%s", host, port)
+            token = self._get_token()
+            access_url = f"http://{host}:{port}"
+            if token:
+                access_url += f"?token={token}"
+            logger.info("[传话筒] WebUI 已启动: %s", access_url)
+            if host == "0.0.0.0":
+                logger.info("[传话筒] 监听所有网络接口，可通过服务器 IP 地址访问（如: http://<服务器IP>:%s）", port)
+                logger.info("[传话筒] 如需限制为仅本地访问，请在配置中将 webui_host 设置为 127.0.0.1")
+            elif host == "127.0.0.1":
+                logger.info("[传话筒] 仅监听本地回环接口，无法从外部访问")
+                logger.info("[传话筒] 如需允许远程访问（Docker/云服务器），请在配置中将 webui_host 设置为 0.0.0.0")
+            if token:
+                logger.info("[传话筒] 已启用 Token 验证，访问时需携带 token 参数或 Authorization 头")
+            else:
+                logger.warning("[传话筒] 未设置 webui_token，WebUI 可在无验证的情况下访问，公网环境建议设置 token")
 
     async def initialize(self):
         await self._ensure_webui()

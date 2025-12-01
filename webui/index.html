@@ -325,6 +325,12 @@
     /* （旧）文件上传样式保留备用 */
     .preset-row select { flex:1; }
     .helper-text { font-size:12px; color: var(--text-sub); margin-top:4px; }
+    .emotion-list { display:flex; flex-direction:column; gap:10px; }
+    .emotion-item { border:1px solid rgba(255,255,255,0.08); border-radius:6px; padding:10px; background:rgba(255,255,255,0.02); }
+    .emotion-row { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+    .emotion-row input[type="text"] { text-transform:none; }
+    .emotion-actions { display:flex; justify-content:space-between; align-items:center; margin-top:8px; }
+    .emotion-actions label { display:flex; align-items:center; gap:6px; margin:0; font-size:12px; color:var(--text-sub); }
 
     #status {
       padding: 8px 16px; font-size: 12px; text-align: center; color: var(--text-sub);
@@ -397,6 +403,10 @@
               <div><label>背景色</label><input type="color" id="backgroundColorInput"></div>
               <div><label>背景图</label><select id="backgroundAssetSelect"></select></div>
             </div>
+            <div class="form-group">
+              <label>背景分组（__auto__ 为全部随机）</label>
+              <select id="backgroundGroupSelect"></select>
+            </div>
           </div>
         </div>
 
@@ -415,6 +425,21 @@
               <div><label>底边距</label><input type="number" data-field="character_bottom"></div>
               <div><label>宽度</label><input type="number" data-field="character_width"></div>
               <div><label>层级 (Z)</label><input type="number" data-field="character_z_index"></div>
+            </div>
+            <div class="form-group">
+              <label>立绘缩放模式</label>
+              <select id="characterFitModeSelect" data-field="character_fit_mode">
+                <option value="fixed_width">固定宽度（沿用右侧宽度）</option>
+                <option value="uniform_height">统一高度（自动等比例）</option>
+              </select>
+            </div>
+            <div class="grid-2">
+              <div><label>统一高度 (px)</label><input type="number" data-field="character_uniform_height"></div>
+              <div><label>顶部偏移 (px)</label><input type="number" data-field="character_top"></div>
+            </div>
+            <div class="toggle-row" style="margin-top:8px;">
+              <input type="checkbox" id="characterAlignBottomInput" />
+              <span>同底对齐（关闭后使用顶部偏移）</span>
             </div>
           </div>
         </div>
@@ -503,6 +528,19 @@
           </div>
         </div>
 
+        <div class="panel-section">
+          <div class="panel-header" onclick="this.parentElement.classList.toggle('collapsed')">情绪标签管理</div>
+          <div class="panel-content">
+            <p class="helper-text">在回答中使用 &key& 即可触发对应情绪与差分。保存后立即生效。</p>
+            <div id="emotionList" class="emotion-list"></div>
+            <div class="btn-group">
+              <button class="btn-secondary" id="addEmotionBtn" type="button">新增标签</button>
+              <button class="btn-danger" id="resetEmotionBtn" type="button">恢复默认</button>
+            </div>
+            <button class="btn-primary" id="saveEmotionBtn" type="button" style="margin-top:12px;">保存情绪配置</button>
+          </div>
+        </div>
+
         <div class="panel-section collapsed">
           <div class="panel-header" onclick="this.parentElement.classList.toggle('collapsed')">资源上传</div>
           <div class="panel-content">
@@ -522,6 +560,21 @@
                   <input type="file" id="fontUpload" accept=".ttf,.otf">
                   <button class="btn-secondary" id="uploadFontBtn">传字体</button>
                 </div>
+              </div>
+              <div class="upload-card">
+                <h4>背景图片</h4>
+                <p>PNG / JPG / WebP，支持批量上传，可为不同风格建立分组。</p>
+                <div class="upload-select-row">
+                  <select id="backgroundGroupUploadSelect" title="请选择背景分组">
+                    <option value="">选择已有分组</option>
+                  </select>
+                  <input type="text" id="backgroundGroupCustom" placeholder="自定义分组 (仅英文)">
+                </div>
+                <div class="upload-controls">
+                  <input type="file" id="backgroundUpload" accept=".png,.jpg,.jpeg,.webp" multiple>
+                  <button class="btn-secondary" id="uploadBackgroundBtn">传背景</button>
+                </div>
+                <p class="helper-text">文件将保存到 data/.../backgrounds/&lt;分组&gt;/</p>
               </div>
               <div class="upload-card">
                 <h4>立绘角色与情绪</h4>
@@ -581,6 +634,17 @@
     const characterUploadInput = document.getElementById('characterUpload');
     const componentUploadInput = document.getElementById('componentUpload');
     const fontUploadInput = document.getElementById('fontUpload');
+    const emotionListEl = document.getElementById('emotionList');
+    const addEmotionBtn = document.getElementById('addEmotionBtn');
+    const saveEmotionBtn = document.getElementById('saveEmotionBtn');
+    const resetEmotionBtn = document.getElementById('resetEmotionBtn');
+    const backgroundGroupSelect = document.getElementById('backgroundGroupSelect');
+    const characterFitModeSelect = document.getElementById('characterFitModeSelect');
+    const characterAlignBottomInput = document.getElementById('characterAlignBottomInput');
+    const backgroundGroupUploadSelect = document.getElementById('backgroundGroupUploadSelect');
+    const backgroundGroupCustom = document.getElementById('backgroundGroupCustom');
+    const backgroundUploadInput = document.getElementById('backgroundUpload');
+    const uploadBackgroundBtn = document.getElementById('uploadBackgroundBtn');
 
     // Inputs
     const inputs = {
@@ -630,6 +694,7 @@
       components: [],
       fonts: [],
       backgrounds: [],
+      background_groups: [],
       characters: [],
       presets: [],
       roles: [],
@@ -676,6 +741,29 @@
       }
       return value || '';
     };
+    const formatBackgroundLabel = (value) => {
+      if(value === '__auto__') return '自动（分组随机）';
+      if(value === '__random__') return '随机（所有背景）';
+      if(value && value.startsWith('builtin::')) {
+        return `内置/${value.split('::')[1] || ''}`;
+      }
+      if(value && value.startsWith('user::')) {
+        const parts = value.split('::');
+        const group = parts.length > 1 ? parts[1] : 'custom';
+        const file = parts.length > 2 ? parts[2] : '';
+        return `用户/${group}/${file}`;
+      }
+      return value || '';
+    };
+    function normalizeLegacyBackgroundAsset() {
+      const asset = state.layout.background_asset;
+      if(asset && !asset.includes('::') && asset !== '__auto__' && asset !== '__random__') {
+        const candidate = `builtin::${asset}`;
+        if(state.backgrounds.includes(candidate)) {
+          state.layout.background_asset = candidate;
+        }
+      }
+    }
     function renderPresetOptions() {
       if(!presetSelect) return;
       presetSelect.innerHTML = '<option value="">选择一个预设</option>';
@@ -711,6 +799,9 @@
       renderPresetStatus();
     }
 
+    const sanitizeEmotionKey = (value = '') => (value || '').toLowerCase().replace(/[^0-9a-z_]/g, '_');
+    const sanitizeFolderName = (value = '') => (value || '').replace(/[^0-9a-zA-Z_-]/g, '_');
+
     function renderRoleOptions() {
       if(characterRoleSelect) {
         const fragments = [];
@@ -733,6 +824,38 @@
             option.textContent = role.label || role.id;
             characterRoleUploadSelect.appendChild(option);
           });
+      }
+    }
+
+    function renderBackgroundGroupOptions() {
+      if(backgroundGroupSelect) {
+        const fragments = ['<option value="__auto__">自动（全部背景）</option>'];
+        const hasBuiltin = state.background_groups.some(g => g.id === 'builtin');
+        if(hasBuiltin) {
+          fragments.push('<option value="builtin">仅内置背景</option>');
+        }
+        state.background_groups
+          .filter(group => group.id && group.id.startsWith('user::'))
+          .forEach(group => {
+            const slug = group.id.split('::')[1] || 'default';
+            const label = `${slug} (${group.count || 0})`;
+            fragments.push(`<option value="${escapeHtml(group.id)}">${escapeHtml(label)}</option>`);
+          });
+        backgroundGroupSelect.innerHTML = fragments.join('');
+        backgroundGroupSelect.value = state.layout.background_group || '__auto__';
+      }
+      if(backgroundGroupUploadSelect) {
+        backgroundGroupUploadSelect.innerHTML = '<option value="">选择已有分组</option>';
+        state.background_groups
+          .filter(group => group.id && group.id.startsWith('user::'))
+          .forEach(group => {
+            const slug = group.id.split('::')[1] || 'default';
+            const option = document.createElement('option');
+            option.value = slug;
+            option.textContent = slug;
+            backgroundGroupUploadSelect.appendChild(option);
+          });
+        updateBackgroundGroupInputState();
       }
     }
 
@@ -760,11 +883,19 @@
         if(state.layout.character_role !== '__auto__') {
           state.layout.character_asset = '__auto__';
         }
+        if(!state.layout.background_asset) state.layout.background_asset = '__auto__';
+        if(!state.layout.background_group) state.layout.background_group = '__auto__';
+        if(!state.layout.character_fit_mode) state.layout.character_fit_mode = 'fixed_width';
+        if(state.layout.character_align_bottom === undefined) state.layout.character_align_bottom = true;
+        if(state.layout.character_uniform_height === undefined) state.layout.character_uniform_height = 620;
+        if(state.layout.character_top === undefined) state.layout.character_top = 0;
+        normalizeLegacyBackgroundAsset();
         state.overlays = normalizeOverlays(state.layout.text_overlays);
         state.presets = data.presets || state.presets;
         setCurrentPreset(data.preset || { name: trimmed, slug: trimmed });
         renderPresetOptions();
         renderRoleOptions();
+        renderBackgroundGroupOptions();
         syncInputsToState();
         renderLayerList();
         renderCanvas();
@@ -793,7 +924,8 @@
     function renderEmotionOptions() {
       if(!characterEmotionSelect) return;
       characterEmotionSelect.innerHTML = '<option value="">情绪 / 差分</option>';
-      state.emotions.forEach(item => {
+      const list = Array.isArray(state.emotions) ? state.emotions : [];
+      list.forEach(item => {
         const value = item.folder || item.key || '';
         if(!value) return;
         const label = item.key ? `${item.key} (${value})` : value;
@@ -802,6 +934,138 @@
         option.textContent = label;
         characterEmotionSelect.appendChild(option);
       });
+    }
+
+    function renderEmotionEditor() {
+      if(!emotionListEl) return;
+      emotionListEl.innerHTML = '';
+      if(!Array.isArray(state.emotions) || !state.emotions.length) {
+        emotionListEl.innerHTML = '<p class="helper-text">暂无情绪标签，点击下方“新增标签”创建。</p>';
+        return;
+      }
+      state.emotions.forEach((emotion, index) => {
+        const row = document.createElement('div');
+        row.className = 'emotion-item';
+
+        const grid = document.createElement('div');
+        grid.className = 'emotion-row';
+
+        const keyGroup = document.createElement('div');
+        keyGroup.className = 'form-group';
+        keyGroup.innerHTML = '<label>标签 Key (&key&)</label>';
+        const keyInput = document.createElement('input');
+        keyInput.type = 'text';
+        keyInput.value = emotion.key || '';
+        keyInput.addEventListener('input', (e) => {
+          const val = sanitizeEmotionKey(e.target.value);
+          state.emotions[index].key = val;
+          e.target.value = val;
+        });
+        keyGroup.appendChild(keyInput);
+
+        const labelGroup = document.createElement('div');
+        labelGroup.className = 'form-group';
+        labelGroup.innerHTML = '<label>展示名称</label>';
+        const labelInput = document.createElement('input');
+        labelInput.type = 'text';
+        labelInput.value = emotion.label || '';
+        labelInput.addEventListener('input', (e) => {
+          state.emotions[index].label = e.target.value;
+        });
+        labelGroup.appendChild(labelInput);
+
+        const folderGroup = document.createElement('div');
+        folderGroup.className = 'form-group';
+        folderGroup.innerHTML = '<label>差分文件夹</label>';
+        const folderInput = document.createElement('input');
+        folderInput.type = 'text';
+        folderInput.value = emotion.folder || '';
+        folderInput.addEventListener('input', (e) => {
+          const val = sanitizeFolderName(e.target.value);
+          state.emotions[index].folder = val;
+          e.target.value = val;
+        });
+        folderGroup.appendChild(folderInput);
+
+        const colorGroup = document.createElement('div');
+        colorGroup.className = 'form-group';
+        colorGroup.innerHTML = '<label>标签颜色</label>';
+        const colorInput = document.createElement('input');
+        colorInput.type = 'color';
+        const colorVal = /^#[0-9a-fA-F]{6}$/.test(emotion.color || '') ? emotion.color : '#ffffff';
+        colorInput.value = colorVal;
+        colorInput.addEventListener('input', (e) => {
+          state.emotions[index].color = e.target.value;
+        });
+        colorGroup.appendChild(colorInput);
+
+        grid.appendChild(keyGroup);
+        grid.appendChild(labelGroup);
+        grid.appendChild(folderGroup);
+        grid.appendChild(colorGroup);
+        row.appendChild(grid);
+
+        const actions = document.createElement('div');
+        actions.className = 'emotion-actions';
+        const toggleLabel = document.createElement('label');
+        const enableInput = document.createElement('input');
+        enableInput.type = 'checkbox';
+        enableInput.checked = emotion.enabled !== false;
+        enableInput.addEventListener('change', (e) => {
+          state.emotions[index].enabled = e.target.checked;
+        });
+        toggleLabel.appendChild(enableInput);
+        toggleLabel.appendChild(document.createTextNode('启用'));
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'btn-danger';
+        removeBtn.type = 'button';
+        removeBtn.textContent = '删除';
+        removeBtn.onclick = () => {
+          state.emotions.splice(index, 1);
+          renderEmotionEditor();
+        };
+        actions.appendChild(toggleLabel);
+        actions.appendChild(removeBtn);
+        row.appendChild(actions);
+
+        emotionListEl.appendChild(row);
+      });
+    }
+
+    function addEmotionRecord() {
+      if(!Array.isArray(state.emotions)) state.emotions = [];
+      const seq = (state.emotions.length + 1).toString(36);
+      const baseKey = `emo_${seq}`;
+      state.emotions.push({
+        key: baseKey,
+        folder: baseKey,
+        label: `情绪${state.emotions.length + 1}`,
+        color: '#ffffff',
+        enabled: true,
+      });
+      renderEmotionEditor();
+    }
+
+    async function syncEmotionSets(path, payload = {}, successMsg = '情绪配置已更新') {
+      setStatus('正在同步情绪配置...');
+      try {
+        const res = await fetch(`${path}${suffix}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeader },
+          body: JSON.stringify(payload),
+        });
+        if(!res.ok) {
+          const msg = await res.text();
+          throw new Error(msg || '保存失败');
+        }
+        const data = await res.json();
+        state.emotions = data.emotion_sets || [];
+        renderEmotionOptions();
+        renderEmotionEditor();
+        setStatus(successMsg);
+      } catch(err) {
+        setStatus(err.message || '操作失败', true);
+      }
     }
 
     function updateEmotionInputState() {
@@ -828,6 +1092,18 @@
       }
     }
 
+    function updateBackgroundGroupInputState() {
+      if(!backgroundGroupCustom) return;
+      const locked = backgroundGroupUploadSelect && backgroundGroupUploadSelect.value;
+      backgroundGroupCustom.disabled = !!locked;
+      if(locked) {
+        backgroundGroupCustom.value = '';
+        backgroundGroupCustom.placeholder = '已选择分组';
+      } else {
+        backgroundGroupCustom.placeholder = '自定义分组 (仅英文)';
+      }
+    }
+
     function resolveSelectedRoleSlug() {
       const selected = characterRoleUploadSelect && characterRoleUploadSelect.value ? characterRoleUploadSelect.value.trim() : '';
       const customEnabled = characterRoleCustom && !characterRoleCustom.disabled;
@@ -840,6 +1116,13 @@
       const customEnabled = characterEmotionCustom && !characterEmotionCustom.disabled;
       const custom = customEnabled ? (characterEmotionCustom.value || '').trim() : '';
       return custom || selected || '';
+    }
+
+    function resolveSelectedBackgroundGroupSlug() {
+      const selected = backgroundGroupUploadSelect && backgroundGroupUploadSelect.value ? backgroundGroupUploadSelect.value.trim() : '';
+      const customEnabled = backgroundGroupCustom && !backgroundGroupCustom.disabled;
+      const custom = customEnabled ? (backgroundGroupCustom.value || '').trim() : '';
+      return custom || selected || 'default';
     }
 
     const getUrl = (name, type) => {
@@ -890,6 +1173,7 @@
         state.characters = data.characters || [];  // 立绘列表
         state.fonts = data.fonts || [];
         state.backgrounds = data.backgrounds || [];
+        state.background_groups = data.background_groups || [];
         state.presets = data.presets || [];
         state.roles = data.character_roles || [];
         state.emotions = data.emotion_sets || [];
@@ -897,6 +1181,13 @@
         if(state.layout.character_role !== '__auto__') {
           state.layout.character_asset = '__auto__';
         }
+        if(!state.layout.background_asset) state.layout.background_asset = '__auto__';
+        if(!state.layout.background_group) state.layout.background_group = '__auto__';
+        if(!state.layout.character_fit_mode) state.layout.character_fit_mode = 'fixed_width';
+        if(state.layout.character_align_bottom === undefined) state.layout.character_align_bottom = true;
+        if(state.layout.character_uniform_height === undefined) state.layout.character_uniform_height = 620;
+        if(state.layout.character_top === undefined) state.layout.character_top = 0;
+        normalizeLegacyBackgroundAsset();
         
         // Ensure defaults
         if(!state.layout.canvas_width) state.layout.canvas_width = 1280;
@@ -909,9 +1200,12 @@
         populateSelects();
         renderPresetOptions();
         renderRoleOptions();
+        renderBackgroundGroupOptions();
         renderEmotionOptions();
+        renderEmotionEditor();
         updateRoleInputState();
         updateEmotionInputState();
+        updateBackgroundGroupInputState();
         syncInputsToState();
         renderCanvas();
         renderLayerList();
@@ -931,7 +1225,13 @@
           return `<option value="${escapeHtml(val)}">${escapeHtml(val)}</option>`;
         }).join('');
       
-      inputs.bgAsset.innerHTML = makeOpts(state.backgrounds, ['__auto__', '__random__']);
+      const bgValues = ['__auto__', '__random__', ...state.backgrounds];
+      inputs.bgAsset.innerHTML = bgValues.map(v => {
+        if(v === '__auto__') return '<option value="__auto__">自动（使用背景分组）</option>';
+        if(v === '__random__') return '<option value="__random__">随机（全部背景）</option>';
+        const val = String(v);
+        return `<option value="${escapeHtml(val)}">${escapeHtml(formatBackgroundLabel(val))}</option>`;
+      }).join('');
       const charValues = ['__auto__', '__random__', ...state.characters];
       inputs.charAsset.innerHTML = charValues.map(v => {
         const val = String(v);
@@ -959,6 +1259,15 @@
       inputs.bgAsset.value = state.layout.background_asset || '__auto__';
       inputs.charAsset.value = state.layout.character_asset || '__auto__';
       inputs.bodyFont.value = state.layout.body_font || '';
+      if(backgroundGroupSelect) {
+        backgroundGroupSelect.value = state.layout.background_group || '__auto__';
+      }
+      if(characterFitModeSelect) {
+        characterFitModeSelect.value = state.layout.character_fit_mode || 'fixed_width';
+      }
+      if(characterAlignBottomInput) {
+        characterAlignBottomInput.checked = state.layout.character_align_bottom !== false;
+      }
 
       // 只在初始化时更新预览，且只在资源不是auto/random时更新
       const bg = state.layout.background_asset;
@@ -984,6 +1293,26 @@
          clearTimeout(previewUpdateTimer);
        }
        previewUpdateTimer = setTimeout(async () => {
+        const roleParam = state.layout.character_role && state.layout.character_role !== '__auto__'
+          ? state.layout.character_role
+          : '';
+        const bgGroupParam = state.layout.background_group && state.layout.background_group !== '__auto__'
+          ? state.layout.background_group
+          : '';
+        let previewCache = null;
+        const ensurePreviewData = async () => {
+          if(previewCache) return previewCache;
+          try {
+            const query = {};
+            if(roleParam) query.role = roleParam;
+            if(bgGroupParam) query.bg_group = bgGroupParam;
+            const res = await fetch(buildQueryUrl('/api/preview-assets', query), { headers: authHeader });
+            if(res.ok) {
+              previewCache = await res.json();
+            }
+          } catch(e) { console.warn('Failed to load preview assets', e); }
+          return previewCache;
+        };
          // Background preview
          const bg = state.layout.background_asset;
          if(bg && bg !== '__auto__' && bg !== '__random__') {
@@ -994,15 +1323,10 @@
            }
          } else if(bg === '__auto__' || bg === '__random__') {
            // 调用API获取随机背景预览（只在需要时调用）
-           try {
-            const res = await fetch(buildQueryUrl('/api/preview-assets'), { headers: authHeader });
-             if(res.ok) {
-               const data = await res.json();
-               if(data.background) {
-                 stage.style.backgroundImage = `url(${data.background})`;
-               }
-             }
-           } catch(e) { console.warn('Failed to load preview background', e); }
+          const data = await ensurePreviewData();
+          if(data && data.background) {
+            stage.style.backgroundImage = `url(${data.background})`;
+          }
          }
          
          // Character preview - 只使用立绘列表
@@ -1012,21 +1336,10 @@
            imgEl.src = getUrl(char, 'char');
          } else if(char === '__auto__' || char === '__random__') {
            // 调用API获取随机立绘预览（只在需要时调用）
-           try {
-            const roleParam = state.layout.character_role && state.layout.character_role !== '__auto__'
-              ? state.layout.character_role
-              : '';
-            const res = await fetch(
-              buildQueryUrl('/api/preview-assets', roleParam ? { role: roleParam } : {}),
-              { headers: authHeader }
-            );
-             if(res.ok) {
-               const data = await res.json();
-               if(data.character) {
-                 imgEl.src = data.character;
-               }
-             }
-           } catch(e) { console.warn('Failed to load preview character', e); }
+          const data = await ensurePreviewData();
+          if(data && data.character) {
+            imgEl.src = data.character;
+          }
          } else if(state.characters.length > 0 && !imgEl.src) {
            // 默认读取第一个立绘
            imgEl.src = getUrl(state.characters[0], 'char');
@@ -1092,14 +1405,21 @@
       const canvasH = Number(l.canvas_height) || 720;
       const { width: charWidth, height: charHeight } = getCharacterDimensions();
       const maxLeft = Math.max(0, canvasW - charWidth);
-      const maxBottom = Math.max(0, canvasH - charHeight);
       l.character_left = Math.min(Math.max(0, Number(l.character_left) || 0), maxLeft);
-      l.character_bottom = Math.min(Math.max(0, Number(l.character_bottom) || 0), maxBottom);
       characterHandle.style.left = l.character_left + 'px';
-      characterHandle.style.bottom = l.character_bottom + 'px';
+      if(l.character_align_bottom !== false) {
+        const maxBottom = Math.max(0, canvasH - charHeight);
+        l.character_bottom = Math.min(Math.max(0, Number(l.character_bottom) || 0), maxBottom);
+        characterHandle.style.bottom = l.character_bottom + 'px';
+        characterHandle.style.top = 'auto';
+      } else {
+        const maxTop = Math.max(0, canvasH - charHeight);
+        l.character_top = Math.min(Math.max(0, Number(l.character_top) || 0), maxTop);
+        characterHandle.style.top = l.character_top + 'px';
+        characterHandle.style.bottom = 'auto';
+      }
       characterHandle.style.width = charWidth + 'px';
       characterHandle.style.height = charHeight + 'px';
-      characterHandle.style.top = 'auto';
       characterHandle.style.zIndex = l.character_z_index || 100;
       characterHandle.classList.toggle('selected', state.activeLayerId === 'sys_char');
 
@@ -1387,8 +1707,17 @@
     function setPos(el, x, y) { el.style.left = x + 'px'; el.style.top = y + 'px'; }
     function setPosSize(el, x, y, w, h) { setPos(el, x, y); el.style.width = w + 'px'; el.style.height = h + 'px'; }
     function getCharacterDimensions() {
+      const mode = state.layout.character_fit_mode || 'fixed_width';
+      const ratio = state.characterRatio && Number.isFinite(state.characterRatio) && state.characterRatio > 0
+        ? state.characterRatio
+        : 1.8;
+      if(mode === 'uniform_height') {
+        const height = Math.max(20, Number(state.layout.character_uniform_height) || 620);
+        const width = Math.max(20, Math.round(height / Math.max(ratio, 0.1)));
+        return { width, height };
+      }
       const width = Math.max(20, Number(state.layout.character_width) || 520);
-      const height = Math.max(20, width * (state.characterRatio || 1.8));
+      const height = Math.max(20, Math.round(width * ratio));
       return { width, height };
     }
 
@@ -1401,6 +1730,12 @@
         const key = el.dataset.field;
         state.layout[key] = parseFloat(el.value) || el.value;
       });
+      if(characterAlignBottomInput) {
+        state.layout.character_align_bottom = characterAlignBottomInput.checked;
+      }
+      if(backgroundGroupSelect) {
+        state.layout.background_group = backgroundGroupSelect.value || '__auto__';
+      }
 
       // 关键数值做限制，避免出现非法值
       state.layout.box_width = Math.max(20, Number(state.layout.box_width) || 640);
@@ -1414,6 +1749,8 @@
       state.layout.character_width = Math.max(50, Number(state.layout.character_width) || 520);
       state.layout.character_left = Math.max(0, Number(state.layout.character_left) || 0);
       state.layout.character_bottom = Math.max(0, Number(state.layout.character_bottom) || 0);
+      state.layout.character_uniform_height = Math.max(50, Number(state.layout.character_uniform_height) || 620);
+      state.layout.character_top = Math.max(0, Number(state.layout.character_top) || 0);
 
       state.layout.background_color = inputs.bgColor.value;
       // 不在这里更新background_asset和character_asset，它们由change事件处理
@@ -1643,6 +1980,22 @@
       overlayEditor.style.display = 'none';
     };
 
+    if(addEmotionBtn) {
+      addEmotionBtn.onclick = () => addEmotionRecord();
+    }
+    if(saveEmotionBtn) {
+      saveEmotionBtn.onclick = async () => {
+        await syncEmotionSets('/api/emotions/save', { emotions: state.emotions }, '情绪配置已保存');
+      };
+    }
+    if(resetEmotionBtn) {
+      resetEmotionBtn.onclick = async () => {
+        const confirmed = window.confirm('确认恢复默认情绪标签配置？');
+        if(!confirmed) return;
+        await syncEmotionSets('/api/emotions/reset', {}, '已恢复默认情绪配置');
+      };
+    }
+
     if(saveDefaultBtn) {
       saveDefaultBtn.onclick = async () => {
         state.layout.text_overlays = state.overlays;
@@ -1714,11 +2067,19 @@
           if(state.layout.character_role !== '__auto__') {
             state.layout.character_asset = '__auto__';
           }
+          if(!state.layout.background_asset) state.layout.background_asset = '__auto__';
+          if(!state.layout.background_group) state.layout.background_group = '__auto__';
+          if(!state.layout.character_fit_mode) state.layout.character_fit_mode = 'fixed_width';
+          if(state.layout.character_align_bottom === undefined) state.layout.character_align_bottom = true;
+          if(state.layout.character_uniform_height === undefined) state.layout.character_uniform_height = 620;
+          if(state.layout.character_top === undefined) state.layout.character_top = 0;
+          normalizeLegacyBackgroundAsset();
           state.overlays = normalizeOverlays(state.layout.text_overlays);
           state.presets = data.presets || state.presets;
           setCurrentPreset(data.preset || { name: data?.preset?.name || slug, slug });
           renderPresetOptions();
           renderRoleOptions();
+          renderBackgroundGroupOptions();
           syncInputsToState();
           renderLayerList();
           renderCanvas();
@@ -1768,6 +2129,35 @@
         updateFromInputs();
         updatePreviewImages();
       });
+    }
+    if(characterFitModeSelect) {
+      characterFitModeSelect.addEventListener('change', () => {
+        updateFromInputs();
+        renderCanvas();
+      });
+    }
+    if(backgroundGroupSelect) {
+      backgroundGroupSelect.addEventListener('change', () => {
+        state.layout.background_group = backgroundGroupSelect.value || '__auto__';
+        updateFromInputs();
+        updatePreviewImages();
+      });
+    }
+    if(backgroundGroupUploadSelect) {
+      backgroundGroupUploadSelect.addEventListener('change', updateBackgroundGroupInputState);
+    }
+    if(characterAlignBottomInput) {
+      characterAlignBottomInput.addEventListener('change', () => {
+        state.layout.character_align_bottom = characterAlignBottomInput.checked;
+        updateFromInputs();
+        renderCanvas();
+      });
+    }
+    if(uploadBackgroundBtn) {
+      uploadBackgroundBtn.onclick = () => {
+        const groupSlug = resolveSelectedBackgroundGroupSlug();
+        uploadFile('background', backgroundUploadInput, { background_group: groupSlug });
+      };
     }
 
     // 预览生成功能
@@ -1830,39 +2220,53 @@
     });
 
     async function uploadFile(type, input, extra = {}) {
-      if(!input || !input.files || !input.files[0]) {
+      if(!input || !input.files || !input.files.length) {
         setStatus('请先选择要上传的文件', true);
         return;
       }
-      const file = input.files[0];
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('filename', file.name);
-      formData.append('kind', type);
-      Object.entries(extra || {}).forEach(([key, value]) => {
-        if(value !== undefined && value !== null && value !== '') {
-          formData.append(key, value);
-        }
-      });
-      setStatus('正在上传...');
-      try {
-        const res = await fetch(`/api/components/upload${suffix}`, {
-          method: 'POST',
-          headers: { ...authHeader },
-          body: formData
+      const files = Array.from(input.files);
+      for(let idx = 0; idx < files.length; idx++) {
+        const file = files[idx];
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('filename', file.name);
+        formData.append('kind', type);
+        Object.entries(extra || {}).forEach(([key, value]) => {
+          if(value !== undefined && value !== null && value !== '') {
+            formData.append(key, value);
+          }
         });
-        if(!res.ok) {
-          const msg = await res.text();
-          throw new Error(msg || '上传失败');
+        setStatus(`正在上传 ${file.name} (${idx + 1}/${files.length})...`);
+        try {
+          const res = await fetch(`/api/components/upload${suffix}`, {
+            method: 'POST',
+            headers: { ...authHeader },
+            body: formData
+          });
+          if(!res.ok) {
+            const msg = await res.text();
+            throw new Error(msg || '上传失败');
+          }
+          const data = await res.json();
+          if(Array.isArray(data.components)) state.components = data.components;
+          if(Array.isArray(data.fonts)) state.fonts = data.fonts;
+          if(Array.isArray(data.characters)) state.characters = data.characters;
+          if(Array.isArray(data.backgrounds)) state.backgrounds = data.backgrounds;
+          if(Array.isArray(data.background_groups)) state.background_groups = data.background_groups;
+          if(Array.isArray(data.character_roles)) state.roles = data.character_roles;
+          populateSelects();
+          renderRoleOptions();
+          renderBackgroundGroupOptions();
+        } catch(err) {
+          console.error(err);
+          setStatus(`上传失败：${err?.message || err}`, true);
+          input.value = '';
+          return;
         }
-        setStatus('上传成功，正在刷新');
-        setTimeout(() => location.reload(), 800);
-      } catch(err) {
-        console.error(err);
-        setStatus(`上传失败：${err?.message || err}`, true);
-      } finally {
-        input.value = '';
       }
+      setStatus('上传完成');
+      input.value = '';
+      updatePreviewImages();
     }
 
     // Init

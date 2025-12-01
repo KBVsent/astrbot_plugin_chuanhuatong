@@ -5,7 +5,11 @@
 
 ## 公网环境请注意配置token！  点个star谢谢喵
 > **当前版本：v1.8.0**
-
+> **下版本（v2.0.0）更新：**
+> **1.添加不同的立绘显示方式配置（自动缩放到同一大小，是否同底等，防止像素导致的大小不一致）**
+> **2.chat history注入修改**
+> **3.优先级配置开关（是否仅渲染llm回复为图片）**
+> **4.背景图支持分组上传，而非单一的插件目录自带背景图**
 ![views](https://count.getloli.com/get/@astrbotchuanhuatong?theme=booru-jaypee)
 
 

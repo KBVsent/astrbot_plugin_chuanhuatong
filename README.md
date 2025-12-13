@@ -5,8 +5,7 @@
 
 ## 公网环境请注意配置token！  点个star谢谢喵
 ## ✨预设市场： https://bvzrays.xyz （开发中！可正常使用但是可能会有数据清理）✨
-> **当前版本：v2.2.0**
-> *反馈群：870543663*
+> **当前版本：v2.2.0 反馈群：870543663**
 
 
 ![views](https://count.getloli.com/get/@astrbotchuanhuatong?theme=booru-jaypee)

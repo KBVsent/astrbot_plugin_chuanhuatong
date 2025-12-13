@@ -23,10 +23,8 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 try:
     from pilmoji import Pilmoji
-    from pilmoji.source import Twemoji
 except Exception:
     Pilmoji = None
-    Twemoji = None
 
 PLAIN_COMPONENT_TYPES = tuple(
     getattr(Comp, name)
@@ -34,8 +32,6 @@ PLAIN_COMPONENT_TYPES = tuple(
     if hasattr(Comp, name)
 )
 LINEBREAK_COMPONENT = getattr(Comp, "LineBreak", None)
-
-IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 
 
 @dataclass
@@ -51,7 +47,7 @@ class EmotionMeta:
     "astrbot_plugin_chuanhuatong",
     "bvzrays",
     "传话筒：将 Bot 的文字回复渲染为 Gal 风立绘对话框",
-    "2.0.0",
+    "2.2.0",
     "https://github.com/bvzrays/astrbot_plugin_chuanhuatong",
 )
 class ChuanHuaTongPlugin(Star):
@@ -69,7 +65,7 @@ class ChuanHuaTongPlugin(Star):
         {"key": "sad", "folder": "sad", "label": "低落", "color": "#7DA1FF", "enabled": True},
         {"key": "shy", "folder": "shy", "label": "害羞", "color": "#F9C5D1", "enabled": True},
         {"key": "surprise", "folder": "surprise", "label": "惊讶", "color": "#F5E960", "enabled": True},
-        {"key": "angry", "folder": "angry", "label": "生气", "color": "#FF8A8A", "enabled": True},
+        {"key": "angry", "folder": "sad", "label": "生气", "color": "#FF8A8A", "enabled": True},
     ]
 
     DEFAULT_PROMPT_TEMPLATE = (
@@ -103,13 +99,8 @@ class ChuanHuaTongPlugin(Star):
         "character_bottom": 0,
         "character_width": 499.72719967439286,
         "character_z_index": 140,
-        "character_fit_mode": "fixed_width",
-        "character_uniform_height": 620,
-        "character_align_bottom": True,
-        "character_top": 0,
         "character_role": "__auto__",
         "character_shadow": "drop-shadow(0 12px 36px rgba(0,0,0,0.6))",
-        "background_group": "__auto__",
         "text_overlays": [
             {
                 "id": "ov_1764055391684",
@@ -307,31 +298,31 @@ class ChuanHuaTongPlugin(Star):
         self._font_dir.mkdir(parents=True, exist_ok=True)
         self._user_char_dir = self._data_dir / "characters"
         self._user_char_dir.mkdir(parents=True, exist_ok=True)
-        self._user_bg_dir = self._data_dir / "backgrounds"
-        self._user_bg_dir.mkdir(parents=True, exist_ok=True)
         self._presets_dir = self._data_dir / "presets"
         self._presets_dir.mkdir(parents=True, exist_ok=True)
         self._current_preset_file = self._data_dir / "current_preset.json"
         self._current_preset_meta: dict[str, Any] = self._load_current_preset_meta()
         self._layout_file = self._data_dir / "layout_state.json"
+        self._session_layouts_dir = self._data_dir / "session_layouts"
+        self._session_layouts_dir.mkdir(parents=True, exist_ok=True)
         self._emotion_file = self._data_dir / "emotion_sets.json"
+        self._whitelist_file = self._data_dir / "whitelist.json"
         self._layout_lock = asyncio.Lock()
         self._layout_state = self._load_layout_state()
+        # 初始化时同步配置文件和 whitelist.json
+        self._sync_whitelist_from_config()
         self._web_runner: Optional[web.AppRunner] = None
         self._web_site: Optional[web.TCPSite] = None
         self._web_app: Optional[web.Application] = None
         self._web_lock = asyncio.Lock()
         self._render_semaphore = asyncio.Semaphore(3)
         self._cached_emotions: Dict[str, EmotionMeta] = {}
-        self._emotion_records: list[dict[str, Any]] = []
         self._ensure_prompt_template()
         self._last_background_path: str = ""
         self._last_character_path: str = ""
         self._cleanup_tasks: set[asyncio.Task] = set()
 
         logger.info("[传话筒] 数据目录：%s", self._data_dir)
-        logger.info("[传话筒] 布局文件：%s", self._layout_file)
-        logger.info("[传话筒] 情绪配置：%s", self._emotion_file)
 
     def cfg(self) -> Dict[str, Any]:
         try:
@@ -343,22 +334,66 @@ class ChuanHuaTongPlugin(Star):
         val = self.cfg().get(key, default)
         return bool(val) if not isinstance(val, str) else val.lower() in {"1", "true", "yes", "on"}
 
-    def _layout(self) -> Dict[str, Any]:
+    def _layout(self, session_id: Optional[str] = None) -> Dict[str, Any]:
+        """获取布局配置，优先返回会话特定配置，否则返回全局配置"""
+        if session_id:
+            session_layout = self._load_session_layout(session_id)
+            if session_layout:
+                return copy.deepcopy(session_layout)
         return copy.deepcopy(self._layout_state)
+
+    def _session_layout_file(self, session_id: str) -> Path:
+        """获取会话布局文件路径"""
+        import hashlib
+        safe_id = hashlib.md5(session_id.encode('utf-8')).hexdigest()
+        return self._session_layouts_dir / f"{safe_id}.json"
+
+    def _load_session_layout(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """加载会话特定的布局配置"""
+        layout_file = self._session_layout_file(session_id)
+        if not layout_file.exists():
+            return None
+        try:
+            data = json.loads(layout_file.read_text(encoding="utf-8"))
+            # 保存预设名称（如果存在）
+            preset_name = data.get("_preset_name")
+            normalized = self._normalize_layout(data)
+            # 恢复预设名称
+            if preset_name:
+                normalized["_preset_name"] = preset_name
+            return normalized
+        except Exception:
+            logger.debug("[传话筒] 读取会话布局失败: %s", session_id, exc_info=True)
+            return None
+
+    def _save_session_layout(self, session_id: str, layout: Dict[str, Any], preset_name: Optional[str] = None):
+        """保存会话特定的布局配置"""
+        layout_file = self._session_layout_file(session_id)
+        try:
+            normalized = self._normalize_layout(layout)
+            # 保存预设名称以便查询
+            if preset_name:
+                normalized["_preset_name"] = preset_name
+            layout_file.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
+            logger.info("[传话筒] 已保存会话布局: %s", session_id)
+        except Exception as exc:
+            logger.error("[传话筒] 保存会话布局失败: %s", exc)
+
+    def _has_session_layout(self, session_id: str) -> bool:
+        """检查会话是否有独立的布局配置"""
+        layout_file = self._session_layout_file(session_id)
+        return layout_file.exists()
 
     def _load_layout_state(self) -> Dict[str, Any]:
         if self._layout_file.exists():
             try:
                 data = json.loads(self._layout_file.read_text(encoding="utf-8"))
-                normalized = self._normalize_layout(data)
-                logger.info("[传话筒] 已载入自定义布局（包含 %s 个覆盖字段）", len(data.keys()))
-                return normalized
+                return self._normalize_layout(data)
             except Exception:
                 logger.warning("[传话筒] 无法读取自定义布局，使用默认布局。")
         legacy = self.cfg().get("text_layout") or {}
         state = self._normalize_layout(self._convert_legacy_layout(legacy))
         self._save_layout_state(state)
-        logger.info("[传话筒] 使用默认布局并写入到 %s", self._layout_file)
         return state
 
     def _save_layout_state(self, layout: Dict[str, Any]):
@@ -371,14 +406,12 @@ class ChuanHuaTongPlugin(Star):
         state = self._normalize_layout(copy.deepcopy(self.DEFAULT_LAYOUT))
         self._save_layout_state(state)
         self._layout_state = state
-        logger.info("[传话筒] 布局已重置为默认值")
         return state
 
     def _set_layout_state(self, layout: Dict[str, Any]):
         normalized = self._normalize_layout(layout)
         self._layout_state = normalized
         self._save_layout_state(normalized)
-        logger.info("[传话筒] 布局已更新并持久化，文本层数：%s", len(normalized.get("text_overlays", [])))
 
     def _sanitize_preset_name(self, name: str) -> str:
         name = str(name or "").strip()
@@ -634,6 +667,184 @@ class ChuanHuaTongPlugin(Star):
         role = getattr(event, "role", None)
         return str(role).lower() == "admin"
 
+    def _is_group_admin(self, event: AstrMessageEvent) -> bool:
+        """检查用户是否是群管理员（仅群聊有效）"""
+        if event.is_private_chat():
+            return False
+        # 优先用 AstrBot 封装判定（框架管理员也算）
+        try:
+            if event.is_admin():
+                return True
+        except Exception:
+            pass
+        # 兼容 OneBot v11：从 raw_message.sender.role 读取
+        try:
+            raw = event.message_obj.raw_message
+            if isinstance(raw, dict):
+                sender = raw.get("sender", {}) or {}
+                role = str(sender.get("role", "")).lower()
+                if role in {"owner", "admin"}:
+                    return True
+        except Exception:
+            pass
+        # 备用方法：从 message_obj.sender 读取
+        try:
+            if hasattr(event, "message_obj") and event.message_obj:
+                sender = getattr(event.message_obj, "sender", None)
+                if sender:
+                    role = getattr(sender, "role", None)
+                    if role and str(role).lower() in {"owner", "admin"}:
+                        return True
+        except Exception:
+            pass
+        return False
+
+    def _check_control_permission(self, event: AstrMessageEvent) -> bool:
+        """检查是否有控制权限（根据配置）"""
+        permission_mode = str(self.cfg().get("control_permission", "admin_or_group_admin")).lower()
+        if permission_mode == "admin":
+            return self._is_event_admin(event)
+        elif permission_mode == "admin_or_group_admin":
+            if self._is_event_admin(event):
+                return True
+            return self._is_group_admin(event)
+        return self._is_event_admin(event)
+
+    def _load_whitelist(self) -> set[str]:
+        """加载黑白名单（优先从配置文件读取，否则从文件读取）"""
+        # 优先从配置文件读取
+        try:
+            config_list = self.cfg().get("whitelist", [])
+            if isinstance(config_list, list) and config_list:
+                return set(str(item) for item in config_list if item)
+        except Exception:
+            pass
+        
+        # 从文件读取（兼容旧数据）
+        if not self._whitelist_file.exists():
+            return set()
+        try:
+            data = json.loads(self._whitelist_file.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                return set(str(item) for item in data)
+            elif isinstance(data, dict):
+                # 兼容旧格式
+                return set(str(item) for item in data.get("list", []))
+        except Exception:
+            logger.debug("[传话筒] 读取黑白名单失败", exc_info=True)
+        return set()
+
+    def _save_whitelist(self, whitelist: set[str], sync_to_config: bool = True):
+        """保存黑白名单（同时保存到配置文件和文件）"""
+        try:
+            data = list(sorted(whitelist))
+            # 保存到文件（兼容性）
+            self._whitelist_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            # 同步到配置文件
+            if sync_to_config:
+                self._sync_whitelist_to_config(whitelist)
+        except Exception as exc:
+            logger.error("[传话筒] 保存黑白名单失败: %s", exc)
+
+    def _sync_whitelist_to_config(self, whitelist: set[str]):
+        """将黑白名单同步到配置文件"""
+        try:
+            if isinstance(self._cfg_obj, AstrBotConfig):
+                self._cfg_obj["whitelist"] = list(sorted(whitelist))
+                # 如果配置对象有 save_config 方法，调用它
+                if hasattr(self._cfg_obj, "save_config"):
+                    try:
+                        self._cfg_obj.save_config()
+                    except Exception:
+                        pass
+        except Exception as exc:
+            logger.debug("[传话筒] 同步黑白名单到配置失败: %s", exc)
+
+    def _sync_whitelist_from_config(self):
+        """从配置文件同步黑白名单到文件（初始化时调用）"""
+        try:
+            config_list = self.cfg().get("whitelist", [])
+            if isinstance(config_list, list) and config_list:
+                whitelist = set(str(item) for item in config_list if item)
+                # 如果文件不存在或文件为空，则从配置同步到文件
+                if not self._whitelist_file.exists():
+                    # 只保存到文件，不同步回配置（避免循环）
+                    data = list(sorted(whitelist))
+                    self._whitelist_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                else:
+                    # 如果文件存在，检查文件是否为空
+                    try:
+                        file_data = json.loads(self._whitelist_file.read_text(encoding="utf-8"))
+                        if not file_data or (isinstance(file_data, list) and len(file_data) == 0):
+                            # 文件为空，使用配置
+                            data = list(sorted(whitelist))
+                            self._whitelist_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                    except Exception:
+                        # 文件读取失败，使用配置
+                        data = list(sorted(whitelist))
+                        self._whitelist_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as exc:
+            logger.debug("[传话筒] 从配置同步黑白名单失败: %s", exc)
+
+    def _is_session_enabled(self, event: AstrMessageEvent) -> bool:
+        """检查当前会话是否应该启用传话筒"""
+        whitelist_mode = self._cfg_bool("whitelist_mode", False)
+        whitelist = self._load_whitelist()
+        session_id = event.unified_msg_origin
+        
+        if whitelist_mode:
+            # 白名单模式：仅在列表中的会话启用
+            return session_id in whitelist
+        else:
+            # 黑名单模式：不在列表中的会话启用
+            return session_id not in whitelist
+
+    def _enable_session(self, event: AstrMessageEvent) -> tuple[bool, str]:
+        """启用会话的传话筒"""
+        whitelist_mode = self._cfg_bool("whitelist_mode", False)
+        whitelist = self._load_whitelist()
+        session_id = event.unified_msg_origin
+        
+        if whitelist_mode:
+            # 白名单模式：添加到白名单
+            if session_id not in whitelist:
+                whitelist.add(session_id)
+                self._save_whitelist(whitelist)
+                return True, "已添加到白名单，传话筒已启用"
+            else:
+                return False, "已在白名单中，传话筒已启用"
+        else:
+            # 黑名单模式：从黑名单移除
+            if session_id in whitelist:
+                whitelist.discard(session_id)
+                self._save_whitelist(whitelist)
+                return True, "已从黑名单移除，传话筒已启用"
+            else:
+                return False, "不在黑名单中，传话筒已启用"
+
+    def _disable_session(self, event: AstrMessageEvent) -> tuple[bool, str]:
+        """禁用会话的传话筒"""
+        whitelist_mode = self._cfg_bool("whitelist_mode", False)
+        whitelist = self._load_whitelist()
+        session_id = event.unified_msg_origin
+        
+        if whitelist_mode:
+            # 白名单模式：从白名单移除
+            if session_id in whitelist:
+                whitelist.discard(session_id)
+                self._save_whitelist(whitelist)
+                return True, "已从白名单移除，传话筒已禁用"
+            else:
+                return False, "不在白名单中，传话筒已禁用"
+        else:
+            # 黑名单模式：添加到黑名单
+            if session_id not in whitelist:
+                whitelist.add(session_id)
+                self._save_whitelist(whitelist)
+                return True, "已添加到黑名单，传话筒已禁用"
+            else:
+                return False, "已在黑名单中，传话筒已禁用"
+
     def _normalize_layout(self, layout: Dict[str, Any]) -> Dict[str, Any]:
         data = copy.deepcopy(self.DEFAULT_LAYOUT)
         for key, value in (layout or {}).items():
@@ -795,146 +1006,22 @@ class ChuanHuaTongPlugin(Star):
                 return str(candidate)
         return None
 
-    def _count_images_in_dir(self, directory: Path) -> int:
-        try:
-            return sum(1 for f in directory.iterdir() if f.is_file() and f.suffix.lower() in IMAGE_SUFFIXES)
-        except Exception:
-            return 0
-
-    def _list_background_groups(self) -> list[dict[str, Any]]:
-        groups: list[dict[str, Any]] = []
-        builtin_count = self._count_images_in_dir(self._bg_dir)
-        if builtin_count:
-            groups.append({"id": "builtin", "label": "内置背景", "count": builtin_count})
-        try:
-            for folder in sorted(self._user_bg_dir.iterdir()):
-                if not folder.is_dir():
-                    continue
-                count = self._count_images_in_dir(folder)
-                if count:
-                    groups.append({
-                        "id": f"user::{folder.name}",
-                        "label": folder.name,
-                        "count": count,
-                    })
-        except Exception:
-            logger.debug("[传话筒] 列出背景分组失败", exc_info=True)
-        return groups
-
     def _list_backgrounds(self) -> list[str]:
-        entries: list[str] = []
         try:
-            for f in self._bg_dir.iterdir():
-                if f.is_file() and f.suffix.lower() in IMAGE_SUFFIXES:
-                    entries.append(f"builtin::{f.name}")
+            return sorted([
+                f.name for f in self._bg_dir.iterdir()
+                if f.is_file() and f.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
+            ])
         except Exception:
-            pass
-        try:
-            for folder in self._user_bg_dir.iterdir():
-                if not folder.is_dir():
-                    continue
-                for f in folder.iterdir():
-                    if f.is_file() and f.suffix.lower() in IMAGE_SUFFIXES:
-                        entries.append(f"user::{folder.name}::{f.name}")
-        except Exception:
-            logger.debug("[传话筒] 列出背景资源失败", exc_info=True)
-        return sorted(entries)
-
-    def _pick_background_path(self, group: Optional[str] = None) -> str:
-        target = (group or "__auto__").strip()
-        if target and target not in {"__auto__", "__random__"}:
-            if target == "builtin":
-                path = self._pick_random_asset(self._bg_dir, IMAGE_SUFFIXES)
-                if path:
-                    return path
-            elif target.startswith("user::"):
-                slug = self._sanitize_folder_name(target.split("::", 1)[1] if "::" in target else target, "default")
-                directory = self._user_bg_dir / slug
-                if directory.exists():
-                    path = self._pick_random_asset(directory, IMAGE_SUFFIXES)
-                    if path:
-                        return path
-        user_dirs: list[Path] = []
-        try:
-            for folder in self._user_bg_dir.iterdir():
-                if folder.is_dir() and self._count_images_in_dir(folder):
-                    user_dirs.append(folder)
-        except Exception:
-            pass
-        if user_dirs:
-            directory = random.choice(user_dirs)
-            path = self._pick_random_asset(directory, IMAGE_SUFFIXES)
-            if path:
-                return path
-        return self._pick_random_asset(self._bg_dir, IMAGE_SUFFIXES)
-
-    def _read_emotion_file(self) -> Optional[list[dict[str, Any]]]:
-        if not self._emotion_file.exists():
-            return None
-        try:
-            data = json.loads(self._emotion_file.read_text(encoding="utf-8"))
-            return data if isinstance(data, list) else None
-        except Exception:
-            logger.debug("[传话筒] 读取情绪配置失败，使用默认配置。", exc_info=True)
-            return None
-
-    def _write_emotion_file(self, records: list[dict[str, Any]]):
-        try:
-            self._emotion_file.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
-        except Exception as exc:
-            logger.error("[传话筒] 写入情绪配置失败: %s", exc)
-
-    def _normalize_emotion_records(self, records: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
-        normalized: list[dict[str, Any]] = []
-        seen: set[str] = set()
-        source = records or []
-        for item in source:
-            if not isinstance(item, dict):
-                continue
-            raw_key = str(item.get("key") or "").strip()
-            key = re.sub(r"[^0-9a-zA-Z_]+", "_", raw_key).lower()
-            if not key or key in seen:
-                continue
-            seen.add(key)
-            folder = self._sanitize_folder_name(str(item.get("folder") or key), key or "neutral")
-            label = str(item.get("label") or raw_key or key).strip() or key
-            color = str(item.get("color") or "#FFFFFF").strip() or "#FFFFFF"
-            enabled = bool(item.get("enabled", True))
-            normalized.append({
-                "key": key,
-                "folder": folder,
-                "label": label,
-                "color": color,
-                "enabled": enabled,
-            })
-        if not normalized:
-            normalized = copy.deepcopy(self.DEFAULT_EMOTIONS)
-        if not any(entry.get("enabled") for entry in normalized):
-            normalized[0]["enabled"] = True
-        return normalized
-
-    def _persist_emotion_sets(self, records: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
-        normalized = self._normalize_emotion_records(records)
-        self._write_emotion_file(normalized)
-        logger.info(
-            "[传话筒] 情绪配置已写入，共 %s 个标签（启用 %s 个）",
-            len(normalized),
-            sum(1 for item in normalized if item.get("enabled")),
-        )
-        return normalized
+            return []
 
     def _load_emotion_sets(self) -> Dict[str, EmotionMeta]:
-        records = self._read_emotion_file()
-        if records is None:
-            src = self.cfg().get("emotion_sets")
-            if isinstance(src, list) and src:
-                records = src
-                logger.info("[传话筒] 从配置加载 %s 个情绪标签", len(records))
-            else:
-                records = copy.deepcopy(self.DEFAULT_EMOTIONS)
-                logger.info("[传话筒] 使用内置默认情绪标签")
-        records = self._persist_emotion_sets(records)
-        self._emotion_records = records
+        src = self.cfg().get("emotion_sets")
+        records: list[dict[str, Any]] = []
+        if isinstance(src, list):
+            records = src
+        else:
+            records = self.DEFAULT_EMOTIONS
         prepared: Dict[str, EmotionMeta] = {}
         enabled_keys: list[str] = []
         for item in records:
@@ -977,11 +1064,6 @@ class ChuanHuaTongPlugin(Star):
             self._cached_emotions = self._load_emotion_sets()
         return self._cached_emotions.copy()
 
-    def _emotion_payload(self) -> list[dict[str, Any]]:
-        if not self._emotion_records:
-            self._emotion_meta()
-        return copy.deepcopy(self._emotion_records)
-
     def _remove_emotion_tags(self, text: str) -> str:
         """移除文本中的情绪标签（&xxx&格式），参考 meme_manager_lite 的实现"""
         if not text:
@@ -994,10 +1076,6 @@ class ChuanHuaTongPlugin(Star):
         # 清理行首行尾的空格（但保留换行符结构）
         lines = cleaned.split("\n")
         cleaned_lines = [line.strip() for line in lines]
-        while cleaned_lines and not cleaned_lines[0]:
-            cleaned_lines.pop(0)
-        while cleaned_lines and not cleaned_lines[-1]:
-            cleaned_lines.pop()
         cleaned = "\n".join(cleaned_lines)
         return cleaned
 
@@ -1035,8 +1113,8 @@ class ChuanHuaTongPlugin(Star):
             return ""
         return self._file_to_data_url(Path(path))
 
-    def _random_background_data(self, group: Optional[str] = None) -> str:
-        path = self._pick_background_path(group)
+    def _random_background_data(self) -> str:
+        path = self._pick_random_asset(self._bg_dir, {".png", ".jpg", ".jpeg", ".webp"})
         self._last_background_path = path or ""
         return self._path_to_data_url(path)
 
@@ -1148,33 +1226,17 @@ class ChuanHuaTongPlugin(Star):
             return ""
         return random.choice(files)
 
-    def _resolve_background_asset(self, asset: str | None, group: Optional[str] = None) -> str:
+    def _resolve_background_asset(self, asset: str | None) -> str:
         name = str(asset or "").strip()
         if name and name not in {"__auto__", "__random__"}:
             path = self._resolve_background_file(name)
             if path:
-                self._last_background_path = path
                 return path
-        path = self._pick_background_path(group)
+        path = self._pick_random_asset(self._bg_dir, {".png", ".jpg", ".jpeg", ".webp"})
         self._last_background_path = path or ""
         return path or ""
 
     def _resolve_background_file(self, name: str) -> str:
-        if not name:
-            return ""
-        if name.startswith("user::"):
-            parts = name.split("::", 2)
-            if len(parts) >= 3:
-                group = self._sanitize_folder_name(parts[1], "default")
-                filename = Path(parts[2]).name
-                target = self._user_bg_dir / group / filename
-                if target.exists():
-                    return str(target)
-        elif name.startswith("builtin::"):
-            safe = Path(name.split("::", 1)[1]).name
-            candidate = self._bg_dir / safe
-            if candidate.exists():
-                return str(candidate)
         safe = Path(name).name
         candidate = self._bg_dir / safe
         if candidate.exists():
@@ -1183,9 +1245,6 @@ class ChuanHuaTongPlugin(Star):
             candidate = directory / safe
             if candidate.exists():
                 return str(candidate)
-        candidate = self._user_bg_dir / safe
-        if candidate.exists():
-            return str(candidate)
         return ""
 
     def _resolve_character_file(self, name: str) -> str:
@@ -1266,9 +1325,9 @@ class ChuanHuaTongPlugin(Star):
         t = str(self.cfg().get("image_type", "png")).lower()
         return "jpeg" if t == "jpeg" else "png"
 
-    async def _render_with_fallback(self, text: str, emotion: str) -> Optional[str]:
+    async def _render_with_fallback(self, text: str, emotion: str, session_id: Optional[str] = None) -> Optional[str]:
         try:
-            return await asyncio.to_thread(self._render_pillow_panel, text, emotion)
+            return await asyncio.to_thread(self._render_pillow_panel, text, emotion, session_id)
         except Exception as exc:
             logger.error("[传话筒] Pillow 合成失败: %s", exc)
             return None
@@ -1306,17 +1365,14 @@ class ChuanHuaTongPlugin(Star):
 
         task.add_done_callback(_remove)
 
-    def _render_pillow_panel(self, text: str, emotion: str) -> Optional[str]:
-        layout = self._layout()
+    def _render_pillow_panel(self, text: str, emotion: str, session_id: Optional[str] = None) -> Optional[str]:
+        layout = self._layout(session_id)
         width = int(layout.get("canvas_width", 1280))
         height = int(layout.get("canvas_height", 720))
         bg_color = self._hex_or_rgba(layout.get("background_color", "#05060A"))
         canvas = Image.new("RGBA", (width, height), bg_color)
 
-        bg_path = self._resolve_background_asset(
-            layout.get("background_asset"),
-            layout.get("background_group"),
-        )
+        bg_path = self._resolve_background_asset(layout.get("background_asset"))
         if bg_path:
             try:
                 bg_img = Image.open(bg_path).convert("RGBA").resize((width, height), Image.LANCZOS)
@@ -1361,22 +1417,13 @@ class ChuanHuaTongPlugin(Star):
             return
         try:
             img = Image.open(path).convert("RGBA")
-            fit_mode = str(layout.get("character_fit_mode", "fixed_width"))
-            if fit_mode == "uniform_height":
-                target_h = max(1, int(layout.get("character_uniform_height", img.height)))
-                ratio = target_h / max(1, img.height)
-                target_w = max(1, int(img.width * ratio))
-            else:
-                target_w = max(1, int(layout.get("character_width", 520)))
-                ratio = target_w / max(1, img.width)
-                target_h = max(1, int(img.height * ratio))
+            target_w = max(1, int(layout.get("character_width", 520)))
+            ratio = target_w / max(1, img.width)
+            target_h = max(1, int(img.height * ratio))
             img = img.resize((target_w, target_h), Image.LANCZOS)
             left = int(layout.get("character_left", 40))
-            if layout.get("character_align_bottom", True):
-                bottom = int(layout.get("character_bottom", 0))
-                top = max(0, canvas.height - target_h - bottom)
-            else:
-                top = max(0, int(layout.get("character_top", 0)))
+            bottom = int(layout.get("character_bottom", 0))
+            top = max(0, canvas.height - target_h - bottom)
             canvas.alpha_composite(img, (left, top))
         except Exception:
             logger.debug("[传话筒] 立绘渲染失败", exc_info=True)
@@ -1394,9 +1441,9 @@ class ChuanHuaTongPlugin(Star):
     ):
         if not text:
             return
-        if Pilmoji and Twemoji:
+        if Pilmoji:
             try:
-                with Pilmoji(canvas, source=Twemoji) as pilmoji:
+                with Pilmoji(canvas) as pilmoji:
                     pilmoji.text(
                         position,
                         text,
@@ -1615,14 +1662,11 @@ class ChuanHuaTongPlugin(Star):
 
     async def _ensure_webui(self):
         if not self._cfg_bool("webui_enabled", True):
-            logger.info("[传话筒] WebUI 被禁用，跳过启动。")
             return
         async with self._web_lock:
             if self._web_runner:
                 return
-            # 默认使用 0.0.0.0 以支持 Docker/远程访问，用户可在配置中改为 127.0.0.1 限制本地访问
-            default_host = "0.0.0.0"
-            host = str(self.cfg().get("webui_host", default_host))
+            host = str(self.cfg().get("webui_host", "127.0.0.1"))
             port = int(self.cfg().get("webui_port", 18765))
             app = web.Application()
             app.add_routes(
@@ -1642,8 +1686,6 @@ class ChuanHuaTongPlugin(Star):
                     web.get("/api/backgrounds/raw/{name}", self._handle_background_file),
                     web.get("/api/characters/raw/{name}", self._handle_character_file),
                     web.get("/api/fonts/raw/{name}", self._handle_font_file),
-                    web.post("/api/emotions/save", self._handle_save_emotions),
-                    web.post("/api/emotions/reset", self._handle_reset_emotions),
                 ]
             )
             self._web_app = app
@@ -1651,26 +1693,11 @@ class ChuanHuaTongPlugin(Star):
             await self._web_runner.setup()
             self._web_site = web.TCPSite(self._web_runner, host, port)
             await self._web_site.start()
-            token = self._get_token()
-            access_url = f"http://{host}:{port}"
-            if token:
-                access_url += f"?token={token}"
-            logger.info("[传话筒] WebUI 已启动: %s", access_url)
-            if host == "0.0.0.0":
-                logger.info("[传话筒] 监听所有网络接口，可通过服务器 IP 地址访问（如: http://<服务器IP>:%s）", port)
-                logger.info("[传话筒] 如需限制为仅本地访问，请在配置中将 webui_host 设置为 127.0.0.1")
-            elif host == "127.0.0.1":
-                logger.info("[传话筒] 仅监听本地回环接口，无法从外部访问")
-                logger.info("[传话筒] 如需允许远程访问（Docker/云服务器），请在配置中将 webui_host 设置为 0.0.0.0")
-            if token:
-                logger.info("[传话筒] 已启用 Token 验证，访问时需携带 token 参数或 Authorization 头")
-            else:
-                logger.warning("[传话筒] 未设置 webui_token，WebUI 可在无验证的情况下访问，公网环境建议设置 token")
+            logger.info("[传话筒] WebUI 已启动: http://%s:%s", host, port)
 
     async def initialize(self):
         await self._ensure_webui()
         self._emotion_meta()
-        logger.info("[传话筒] 插件初始化完成，已准备情绪与布局。")
 
     async def terminate(self):
         async with self._web_lock:
@@ -1681,7 +1708,6 @@ class ChuanHuaTongPlugin(Star):
                 await self._web_runner.cleanup()
                 self._web_runner = None
             self._web_app = None
-        logger.info("[传话筒] 插件已终止，WebUI 关闭。")
 
     def _get_token(self) -> str:
         return str(self.cfg().get("webui_token", "")).strip()
@@ -1708,7 +1734,6 @@ class ChuanHuaTongPlugin(Star):
     async def _handle_get_layout(self, request: web.Request):
         await self._authorize(request)
         emotions = self._emotion_meta()
-        emotion_payload = self._emotion_payload()
         layout = self._layout()
         payload = {
             "layout": layout,
@@ -1717,10 +1742,18 @@ class ChuanHuaTongPlugin(Star):
             "character_roles": self._list_character_roles(),
             "fonts": self._list_fonts(),
             "backgrounds": self._list_backgrounds(),
-            "background_groups": self._list_background_groups(),
             "presets": self._list_presets(),
             "bot_name": self._bot_name(),
-            "emotion_sets": emotion_payload,
+            "emotion_sets": [
+                {
+                    "key": key,
+                    "folder": meta.folder,
+                    "label": meta.label,
+                    "color": meta.color,
+                    "enabled": meta.enabled,
+                }
+                for key, meta in emotions.items()
+            ],
             "canvas": {
                 "width": layout["canvas_width"],
                 "height": layout["canvas_height"],
@@ -1731,9 +1764,8 @@ class ChuanHuaTongPlugin(Star):
     async def _handle_preview_assets(self, request: web.Request):
         await self._authorize(request)
         role = str(request.query.get("role", "")).strip() or None
-        bg_group = str(request.query.get("bg_group", "")).strip() or None
         preview = {
-            "background": self._random_background_data(bg_group),
+            "background": self._random_background_data(),
             "character": self._preview_character(role),
         }
         return web.json_response(preview)
@@ -1855,7 +1887,6 @@ class ChuanHuaTongPlugin(Star):
         kind = "component"
         emotion_from_form = ""
         role_from_form = ""
-        bg_group_from_form = ""
         if "multipart/form-data" in content_type:
             form = await request.post()
             file_field = form.get("file")
@@ -1865,7 +1896,6 @@ class ChuanHuaTongPlugin(Star):
             kind = str(form.get("kind") or "component").lower()
             emotion_from_form = str(form.get("emotion") or "").strip()
             role_from_form = str(form.get("role") or "").strip()
-            bg_group_from_form = str(form.get("background_group") or "").strip()
             binary_data = file_field.file.read()
         else:
             try:
@@ -1883,7 +1913,6 @@ class ChuanHuaTongPlugin(Star):
                 raise web.HTTPBadRequest(text="invalid data")
             emotion_from_form = str((payload or {}).get("emotion") or "").strip()
             role_from_form = str((payload or {}).get("role") or "").strip()
-            bg_group_from_form = str((payload or {}).get("background_group") or "").strip()
         if kind == "font":
             allowed = (".ttf", ".ttc", ".otf")
             target_dir = self._font_dir
@@ -1892,11 +1921,6 @@ class ChuanHuaTongPlugin(Star):
             emotion_folder = self._sanitize_folder_name(emotion_from_form or "custom", "custom")
             role_folder = self._sanitize_role_name(role_from_form or "general", "general")
             target_dir = self._user_char_dir / role_folder / emotion_folder
-            target_dir.mkdir(parents=True, exist_ok=True)
-        elif kind == "background":
-            allowed = (".png", ".jpg", ".jpeg", ".webp")
-            group_folder = self._sanitize_folder_name(bg_group_from_form or "default", "default")
-            target_dir = self._user_bg_dir / group_folder
             target_dir.mkdir(parents=True, exist_ok=True)
         else:
             allowed = (".png", ".webp", ".gif")
@@ -1917,8 +1941,6 @@ class ChuanHuaTongPlugin(Star):
             "components": self._list_components(),
             "fonts": self._list_fonts(),
             "characters": self._list_characters(),
-            "backgrounds": self._list_backgrounds(),
-            "background_groups": self._list_background_groups(),
         })
 
     async def _handle_component_file(self, request: web.Request):
@@ -1959,35 +1981,6 @@ class ChuanHuaTongPlugin(Star):
         else:
             content_type = "font/ttf"
         return web.FileResponse(path, headers={"Content-Type": content_type})
-
-    async def _handle_save_emotions(self, request: web.Request):
-        await self._authorize(request)
-        try:
-            body = await request.json()
-        except Exception:
-            raise web.HTTPBadRequest(text="invalid json")
-        records = body.get("emotions")
-        if not isinstance(records, list):
-            raise web.HTTPBadRequest(text="emotions required")
-        normalized = self._persist_emotion_sets(records)
-        self._emotion_records = normalized
-        self._cached_emotions.clear()
-        logger.info("[传话筒] WebUI 已保存情绪配置")
-        return web.json_response({
-            "ok": True,
-            "emotion_sets": self._emotion_payload(),
-        })
-
-    async def _handle_reset_emotions(self, request: web.Request):
-        await self._authorize(request)
-        normalized = self._persist_emotion_sets(copy.deepcopy(self.DEFAULT_EMOTIONS))
-        self._emotion_records = normalized
-        self._cached_emotions.clear()
-        logger.info("[传话筒] WebUI 请求恢复默认情绪配置")
-        return web.json_response({
-            "ok": True,
-            "emotion_sets": self._emotion_payload(),
-        })
 
     if hasattr(filter, "on_message"):
 
@@ -2052,35 +2045,22 @@ class ChuanHuaTongPlugin(Star):
     @filter.on_decorating_result(priority=-10)  # 降低优先级，确保在其他插件之后处理
     async def on_decorating_result(self, event: AstrMessageEvent):
         """在装饰结果时清理表情标签，参考 meme_manager_lite 的实现"""
-        if not self._cfg_bool("enable_render", True):
-            return
+        session_id = event.unified_msg_origin
+        logger.debug("[传话筒] on_decorating_result 触发，会话: %s", session_id)
         
-        render_scope = str(self.cfg().get("render_scope", "llm_only")).lower()
-        allow_non_llm = render_scope == "all_text"
-
-        # 获取保存的响应对象
-        resp = event.get_extra("llm_resp")
-        resp_obj = resp if isinstance(resp, LLMResponse) else None
-        if resp_obj is None and not allow_non_llm:
-            return
-        if resp_obj:
-            # 清理响应文本中的表情标签（参考 meme_manager_lite）
-            if hasattr(resp_obj, "completion_text") and resp_obj.completion_text:
-                resp_obj.completion_text = self._remove_emotion_tags(resp_obj.completion_text)
-            elif hasattr(resp_obj, "text") and resp_obj.text:
-                resp_obj.text = self._remove_emotion_tags(resp_obj.text)
-            elif hasattr(resp_obj, "content") and resp_obj.content:
-                resp_obj.content = self._remove_emotion_tags(resp_obj.content)
-        
-        # 获取当前结果并清理消息链中的文本
+        # 获取当前结果并清理消息链中的文本（无论是否启用渲染，都要清洗标签）
         result = event.get_result()
         if not result:
+            logger.debug("[传话筒] 未获取到结果对象，跳过处理")
             return
         chain = result.chain
         if not chain:
+            logger.debug("[传话筒] 消息链为空，跳过处理")
             return
         
-        # 提取完整文本用于判断和渲染
+        logger.debug("[传话筒] 开始处理消息链，原始链长度: %s", len(chain))
+        
+        # 第一步：清洗标签并更新消息链（无论是否渲染，都要先清洗）
         raw_text_parts = []
         new_chain = []
         has_non_text = False
@@ -2090,6 +2070,7 @@ class ChuanHuaTongPlugin(Star):
                 original_text = getattr(item, "text", "") or ""
                 raw_text_parts.append(original_text)
                 cleaned_text = self._remove_emotion_tags(original_text)
+                logger.debug("[传话筒] 清洗文本: 原始='%s', 清洗后='%s'", original_text[:50], cleaned_text[:50] if cleaned_text else "")
                 if cleaned_text:
                     new_item = type(item)(cleaned_text)
                     new_chain.append(new_item)
@@ -2097,16 +2078,57 @@ class ChuanHuaTongPlugin(Star):
                 has_non_text = True
                 new_chain.append(item)
         
-        # 更新消息链
+        # 立即更新消息链为清洗后的文本（确保无论后续是否渲染，都返回清洗后的文本）
         result.chain = new_chain
+        logger.info("[传话筒] 消息链已更新为清洗后的文本，新链长度: %s, 包含非文本组件: %s", len(new_chain), has_non_text)
         
-        # 如果只有文本组件，尝试渲染
+        # 清理响应对象中的表情标签
+        resp = event.get_extra("llm_resp")
+        resp_obj = resp if isinstance(resp, LLMResponse) else None
+        if resp_obj:
+            logger.debug("[传话筒] 清理LLM响应对象中的表情标签")
+            if hasattr(resp_obj, "completion_text") and resp_obj.completion_text:
+                original = resp_obj.completion_text
+                resp_obj.completion_text = self._remove_emotion_tags(resp_obj.completion_text)
+                if original != resp_obj.completion_text:
+                    logger.debug("[传话筒] completion_text 已清理标签，原始长度: %s, 清理后长度: %s", len(original), len(resp_obj.completion_text))
+            elif hasattr(resp_obj, "text") and resp_obj.text:
+                original = resp_obj.text
+                resp_obj.text = self._remove_emotion_tags(resp_obj.text)
+                if original != resp_obj.text:
+                    logger.debug("[传话筒] text 已清理标签，原始长度: %s, 清理后长度: %s", len(original), len(resp_obj.text))
+            elif hasattr(resp_obj, "content") and resp_obj.content:
+                original = resp_obj.content
+                resp_obj.content = self._remove_emotion_tags(resp_obj.content)
+                if original != resp_obj.content:
+                    logger.debug("[传话筒] content 已清理标签，原始长度: %s, 清理后长度: %s", len(original), len(resp_obj.content))
+        
+        # 第二步：判断是否要渲染（只有在启用渲染且会话启用的情况下才渲染）
+        if not self._cfg_bool("enable_render", True):
+            logger.debug("[传话筒] 渲染功能已禁用，返回清洗后的文本")
+            return
+        
+        # 检查黑白名单
+        if not self._is_session_enabled(event):
+            logger.debug("[传话筒] 当前会话未启用传话筒（黑白名单检查），返回清洗后的文本，会话: %s", session_id)
+            return
+        
+        render_scope = str(self.cfg().get("render_scope", "llm_only")).lower()
+        allow_non_llm = render_scope == "all_text"
+        logger.debug("[传话筒] 渲染范围: %s, 允许非LLM: %s", render_scope, allow_non_llm)
+        
+        if resp_obj is None and not allow_non_llm:
+            logger.debug("[传话筒] 无LLM响应且不允许非LLM文本，返回清洗后的文本")
+            return
+        
+        # 第三步：如果只有文本组件，尝试渲染
         if not has_non_text and raw_text_parts:
             raw_full_text = "".join(raw_text_parts)
             emotion, cleaned_full_text = self._emotion_from_text(raw_full_text)
             full_text = cleaned_full_text.strip()
             if full_text:
-                logger.debug("[传话筒] 触发渲染，情绪=%s，长度=%s", emotion, len(full_text))
+                logger.info("[传话筒] 触发渲染判断，情绪=%s，原始文本长度=%s，清洗后长度=%s，清洗后文本='%s'", 
+                          emotion, len(raw_full_text), len(full_text), full_text[:100])
                 if resp_obj is not None:
                     await self._update_conversation_history(event, full_text)
                 
@@ -2115,19 +2137,28 @@ class ChuanHuaTongPlugin(Star):
                 if char_limit > 0:
                     text_len = self._count_visible_chars(full_text)
                     if text_len > char_limit:
-                        logger.info("[传话筒] 文本长度 %s 超过阈值 %s，跳过渲染。", text_len, char_limit)
+                        logger.info("[传话筒] 文本长度 %s 超过阈值 %s，跳过渲染，返回清洗后的文本", text_len, char_limit)
+                        # 此时 result.chain 已经是清洗后的文本，直接返回
                         return
                 
-                # 尝试渲染
-                image_path = await self._render_with_fallback(full_text, emotion)
+                # 第四步：尝试渲染，如果成功则替换为图片，失败则保持清洗后的文本
+                logger.debug("[传话筒] 开始渲染图片，会话: %s", session_id)
+                image_path = await self._render_with_fallback(full_text, emotion, session_id)
                 if image_path:
                     try:
+                        # 渲染成功，替换为图片
                         result.chain = [Comp.Image.fromFileSystem(image_path)]
                         self._schedule_cleanup(image_path, delay=90.0)
+                        logger.info("[传话筒] 渲染成功，已替换为图片，会话: %s", session_id)
                     except Exception as exc:
-                        logger.error(f"[传话筒] 设置图片结果失败: {exc}")
+                        logger.error("[传话筒] 设置图片结果失败: %s，会话: %s，保持清洗后的文本", exc, session_id)
+                        # 渲染失败，保持清洗后的文本（result.chain 已经是清洗后的文本）
                 else:
-                    logger.warning("[传话筒] 渲染失败，退回纯文本。")
+                    logger.warning("[传话筒] 渲染失败，退回纯文本，会话: %s", session_id)
+                    # 渲染失败，保持清洗后的文本（result.chain 已经是清洗后的文本）
+        else:
+            logger.debug("[传话筒] 消息链包含非文本组件或为空，跳过渲染，会话: %s", session_id)
+            # 包含非文本组件，保持清洗后的文本（result.chain 已经是清洗后的文本）
 
     def _ensure_prompt_template(self):
         if not isinstance(self._cfg_obj, dict):
@@ -2176,19 +2207,33 @@ class ChuanHuaTongPlugin(Star):
                 return text.strip()
         return ""
 
-    def _switch_preset(self, target: str) -> tuple[bool, str, Optional[str]]:
+    def _switch_preset(self, target: str, session_id: Optional[str] = None) -> tuple[bool, str, Optional[str]]:
+        """切换预设，如果提供了session_id则保存到会话配置，否则保存到全局配置"""
         normalized = str(target or "").strip()
         if not normalized:
             return False, self._format_preset_list_message(), None
         record = self._load_preset(normalized)
         if not record:
             return False, f"未找到名为「{normalized}」的预设。\n\n{self._format_preset_list_message()}", None
-        self._set_layout_state(record["layout"])
-        self._remember_current_preset(record)
-        # 刷新缓存，确保立绘正确显示
-        self._cached_emotions.clear()
-        self._emotion_meta()  # 重新加载情绪配置
-        return True, f"已切换到预设「{record['name']}」。", record.get("name") or normalized
+        
+        if session_id:
+            # 保存到会话特定配置
+            preset_name = record.get("name") or normalized
+            self._save_session_layout(session_id, record["layout"], preset_name)
+            # 刷新缓存，确保立绘正确显示
+            self._cached_emotions.clear()
+            self._emotion_meta()  # 重新加载情绪配置
+            logger.info("[传话筒] 切换到预设: %s (会话: %s)", preset_name, session_id)
+            return True, f"已切换到预设「{preset_name}」（仅当前会话）。", preset_name
+        else:
+            # 保存到全局配置
+            self._set_layout_state(record["layout"])
+            self._remember_current_preset(record)
+            # 刷新缓存，确保立绘正确显示
+            self._cached_emotions.clear()
+            self._emotion_meta()  # 重新加载情绪配置
+            logger.info("[传话筒] 切换到预设: %s (全局)", record.get("name") or normalized)
+            return True, f"已切换到预设「{record['name']}」（全局）。", record.get("name") or normalized
 
     async def _handle_preset_command(
         self,
@@ -2207,12 +2252,13 @@ class ChuanHuaTongPlugin(Star):
         if not stripped.startswith("切换预设"):
             return False
         target = stripped[len("切换预设"):].strip()
-        if not self._is_event_admin(event):
-            denial = "只有管理员可以切换预设。"
+        if not self._check_control_permission(event):
+            denial = "你没有权限使用此指令。"
             event.set_result(event.plain_result(denial))
             event.stop_event()
             return True
-        success, message, preset_name = self._switch_preset(target)
+        session_id = event.unified_msg_origin
+        success, message, preset_name = self._switch_preset(target, session_id)
         event.set_result(event.plain_result(message))
         event.stop_event()
         if success:
@@ -2221,19 +2267,76 @@ class ChuanHuaTongPlugin(Star):
 
     @filter.command("切换预设")
     async def command_switch_preset(self, event: AstrMessageEvent, *preset_tokens: str):
-        if not self._is_event_admin(event):
-            yield event.plain_result("只有管理员可以切换预设。")
+        """切换预设（仅当前会话）。用法：/切换预设 <预设名>"""
+        if not self._check_control_permission(event):
+            yield event.plain_result("你没有权限使用此指令。")
             event.stop_event()
             return
         target = " ".join(preset_tokens).strip()
-        success, message, preset_name = self._switch_preset(target)
+        if not target:
+            yield event.plain_result("请提供预设名称。使用 /预设列表 查看所有可用预设。")
+            event.stop_event()
+            return
+        session_id = event.unified_msg_origin
+        success, message, preset_name = self._switch_preset(target, session_id)
         yield event.plain_result(message)
         event.stop_event()
         if success:
-            logger.info("[传话筒] 通过命令切换预设: %s", preset_name)
+            logger.info("[传话筒] 通过命令切换预设: %s (会话: %s)", preset_name, session_id)
 
     @filter.command("预设列表")
     async def command_list_presets(self, event: AstrMessageEvent):
+        """列出所有可用的预设"""
         message = self._format_preset_list_message()
+        yield event.plain_result(message)
+        event.stop_event()
+
+    @filter.command("传话筒开启")
+    async def command_chuanhuatong_enable(self, event: AstrMessageEvent):
+        """在当前会话启用传话筒（根据模式添加到白名单或从黑名单移除）"""
+        if not self._check_control_permission(event):
+            yield event.plain_result("你没有权限使用此指令。")
+            event.stop_event()
+            return
+        success, message = self._enable_session(event)
+        yield event.plain_result(message)
+        event.stop_event()
+
+    @filter.command("传话筒关闭")
+    async def command_chuanhuatong_disable(self, event: AstrMessageEvent):
+        """在当前会话禁用传话筒（根据模式从白名单移除或添加到黑名单）"""
+        if not self._check_control_permission(event):
+            yield event.plain_result("你没有权限使用此指令。")
+            event.stop_event()
+            return
+        success, message = self._disable_session(event)
+        yield event.plain_result(message)
+        event.stop_event()
+
+    @filter.command("传话筒状态")
+    async def command_chuanhuatong_status(self, event: AstrMessageEvent):
+        """查询传话筒当前状态（启用状态、模式、配置类型、预设）"""
+        if not self._check_control_permission(event):
+            yield event.plain_result("你没有权限使用此指令。")
+            event.stop_event()
+            return
+        is_enabled = self._is_session_enabled(event)
+        whitelist_mode = self._cfg_bool("whitelist_mode", False)
+        mode_text = "白名单模式" if whitelist_mode else "黑名单模式"
+        status_text = "已启用" if is_enabled else "已禁用"
+        session_id = event.unified_msg_origin
+        has_custom = self._has_session_layout(session_id)
+        if has_custom:
+            # 获取会话特定的预设信息
+            session_layout = self._load_session_layout(session_id)
+            preset_name = session_layout.get("_preset_name") if session_layout else None
+            if preset_name:
+                current_preset = f"{preset_name}（会话独立配置）"
+            else:
+                current_preset = "自定义布局（会话独立配置）"
+        else:
+            current_preset = self._current_preset_name() or "自定义布局（全局配置）"
+        config_type = "会话独立配置" if has_custom else "全局配置"
+        message = f"传话筒状态：{status_text}\n模式：{mode_text}\n配置类型：{config_type}\n当前预设：{current_preset}"
         yield event.plain_result(message)
         event.stop_event()

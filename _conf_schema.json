@@ -67,8 +67,8 @@
 
   "webui_host": {
     "type": "string",
-    "description": "WebUI 监听地址。0.0.0.0 允许远程访问（Docker/云服务器推荐），127.0.0.1 仅本地访问",
-    "default": "0.0.0.0"
+    "description": "WebUI 监听地址",
+    "default": "127.0.0.1"
   },
   "webui_port": {
     "type": "int",
@@ -101,5 +101,31 @@
         "enabled": { "type": "bool", "default": true }
       }
     }
+  },
+
+  "whitelist_mode": {
+    "type": "bool",
+    "description": "是否启用白名单模式（true=白名单模式，false=黑名单模式）",
+    "default": false,
+    "hint": "黑名单模式：列表中的群/私聊禁用传话筒；白名单模式：仅列表中的群/私聊启用传话筒"
+  },
+
+  "whitelist": {
+    "type": "list",
+    "description": "黑白名单列表（会话ID列表，格式：platform:message_type:session_id）",
+    "default": [],
+    "items": {
+      "type": "string",
+      "description": "会话ID，例如：aiocqhttp:group:123456789"
+    },
+    "hint": "可通过 /传话筒 开启 或 /传话筒 关闭 指令管理，也可在此直接编辑。黑名单模式：列表中的会话禁用传话筒；白名单模式：仅列表中的会话启用传话筒"
+  },
+
+  "control_permission": {
+    "type": "string",
+    "description": "控制指令权限：admin=仅框架管理员，admin_or_group_admin=框架管理员或群管理",
+    "default": "admin_or_group_admin",
+    "options": ["admin", "admin_or_group_admin"],
+    "hint": "控制切换预设和开启/关闭传话筒的权限"
   }
 }

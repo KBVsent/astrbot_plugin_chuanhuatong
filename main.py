@@ -33,6 +33,8 @@ PLAIN_COMPONENT_TYPES = tuple(
 )
 LINEBREAK_COMPONENT = getattr(Comp, "LineBreak", None)
 
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
+
 
 @dataclass
 class EmotionMeta:
@@ -322,6 +324,7 @@ class ChuanHuaTongPlugin(Star):
         self._web_lock = asyncio.Lock()
         self._render_semaphore = asyncio.Semaphore(3)
         self._cached_emotions: Dict[str, EmotionMeta] = {}
+        self._emotion_records: list[dict[str, Any]] = []
         self._ensure_prompt_template()
         self._last_background_path: str = ""
         self._last_character_path: str = ""
@@ -1022,69 +1025,146 @@ class ChuanHuaTongPlugin(Star):
                 return str(candidate)
         return None
 
-    def _list_backgrounds(self, group: Optional[str] = None) -> list[str]:
-        """列出背景文件，支持按组筛选"""
+    def _list_backgrounds(self) -> list[str]:
+        entries: list[str] = []
         try:
-            if group and group not in {"__auto__", "__random__", ""}:
-                # 按组筛选：查找 group 子目录
-                group_dir = self._bg_dir / group
-                if group_dir.exists() and group_dir.is_dir():
-                    files = [
-                        f.name for f in group_dir.iterdir()
-                        if f.is_file() and f.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
-                    ]
-                    return sorted(files)
-            # 默认返回根目录下的所有背景
-            return sorted([
-                f.name for f in self._bg_dir.iterdir()
-                if f.is_file() and f.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
-            ])
+            for f in self._bg_dir.iterdir():
+                if f.is_file() and f.suffix.lower() in IMAGE_SUFFIXES:
+                    entries.append(f"builtin::{f.name}")
         except Exception:
-            return []
+            pass
+        try:
+            for folder in self._user_bg_dir.iterdir():
+                if not folder.is_dir():
+                    continue
+                for f in folder.iterdir():
+                    if f.is_file() and f.suffix.lower() in IMAGE_SUFFIXES:
+                        entries.append(f"user::{folder.name}::{f.name}")
+        except Exception:
+            logger.debug("[传话筒] 列出背景资源失败", exc_info=True)
+        return sorted(entries)
+    
+    def _count_images_in_dir(self, directory: Path) -> int:
+        try:
+            return sum(1 for f in directory.iterdir() if f.is_file() and f.suffix.lower() in IMAGE_SUFFIXES)
+        except Exception:
+            return 0
+    
+    def _pick_background_path(self, group: Optional[str] = None) -> str:
+        target = (group or "__auto__").strip()
+        if target and target not in {"__auto__", "__random__"}:
+            if target == "builtin":
+                path = self._pick_random_asset(self._bg_dir, IMAGE_SUFFIXES)
+                if path:
+                    return path
+            elif target.startswith("user::"):
+                slug = self._sanitize_folder_name(target.split("::", 1)[1] if "::" in target else target, "default")
+                directory = self._user_bg_dir / slug
+                if directory.exists():
+                    path = self._pick_random_asset(directory, IMAGE_SUFFIXES)
+                    if path:
+                        return path
+        user_dirs: list[Path] = []
+        try:
+            for folder in self._user_bg_dir.iterdir():
+                if folder.is_dir() and self._count_images_in_dir(folder):
+                    user_dirs.append(folder)
+        except Exception:
+            pass
+        if user_dirs:
+            directory = random.choice(user_dirs)
+            path = self._pick_random_asset(directory, IMAGE_SUFFIXES)
+            if path:
+                return path
+        return self._pick_random_asset(self._bg_dir, IMAGE_SUFFIXES)
     
     def _list_background_groups(self) -> list[dict[str, Any]]:
-        """列出背景分组"""
         groups: list[dict[str, Any]] = []
+        builtin_count = self._count_images_in_dir(self._bg_dir)
+        if builtin_count:
+            groups.append({"id": "builtin", "label": "内置背景", "count": builtin_count})
         try:
-            if not self._bg_dir.exists():
-                return groups
-            
-            # 检查根目录是否有文件（内置组）
-            root_files = [
-                f for f in self._bg_dir.iterdir()
-                if f.is_file() and f.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
-            ]
-            if root_files:
-                groups.append({
-                    "id": "builtin",
-                    "label": "内置背景",
-                    "count": len(root_files)
-                })
-            
-            # 检查子目录（用户分组）
-            for item in self._bg_dir.iterdir():
-                if item.is_dir():
-                    files = [
-                        f for f in item.iterdir()
-                        if f.is_file() and f.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
-                    ]
-                    if files:
-                        groups.append({
-                            "id": item.name,
-                            "label": item.name,
-                            "count": len(files)
-                        })
+            for folder in sorted(self._user_bg_dir.iterdir()):
+                if not folder.is_dir():
+                    continue
+                count = self._count_images_in_dir(folder)
+                if count:
+                    groups.append({
+                        "id": f"user::{folder.name}",
+                        "label": folder.name,
+                        "count": count,
+                    })
         except Exception:
             logger.debug("[传话筒] 列出背景分组失败", exc_info=True)
         return groups
 
+    def _read_emotion_file(self) -> Optional[list[dict[str, Any]]]:
+        if not self._emotion_file.exists():
+            return None
+        try:
+            data = json.loads(self._emotion_file.read_text(encoding="utf-8"))
+            return data if isinstance(data, list) else None
+        except Exception:
+            logger.debug("[传话筒] 读取情绪配置失败，使用默认配置。", exc_info=True)
+            return None
+
+    def _write_emotion_file(self, records: list[dict[str, Any]]):
+        try:
+            self._emotion_file.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as exc:
+            logger.error("[传话筒] 写入情绪配置失败: %s", exc)
+
+    def _normalize_emotion_records(self, records: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+        normalized: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        source = records or []
+        for item in source:
+            if not isinstance(item, dict):
+                continue
+            raw_key = str(item.get("key") or "").strip()
+            key = re.sub(r"[^0-9a-zA-Z_]+", "_", raw_key).lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            folder = self._sanitize_folder_name(str(item.get("folder") or key), key or "neutral")
+            label = str(item.get("label") or raw_key or key).strip() or key
+            color = str(item.get("color") or "#FFFFFF").strip() or "#FFFFFF"
+            enabled = bool(item.get("enabled", True))
+            normalized.append({
+                "key": key,
+                "folder": folder,
+                "label": label,
+                "color": color,
+                "enabled": enabled,
+            })
+        if not normalized:
+            normalized = copy.deepcopy(self.DEFAULT_EMOTIONS)
+        if not any(entry.get("enabled") for entry in normalized):
+            normalized[0]["enabled"] = True
+        return normalized
+
+    def _persist_emotion_sets(self, records: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+        normalized = self._normalize_emotion_records(records)
+        self._write_emotion_file(normalized)
+        logger.info(
+            "[传话筒] 情绪配置已写入，共 %s 个标签（启用 %s 个）",
+            len(normalized),
+            sum(1 for item in normalized if item.get("enabled")),
+        )
+        return normalized
+
     def _load_emotion_sets(self) -> Dict[str, EmotionMeta]:
-        src = self.cfg().get("emotion_sets")
-        records: list[dict[str, Any]] = []
-        if isinstance(src, list):
-            records = src
-        else:
-            records = self.DEFAULT_EMOTIONS
+        records = self._read_emotion_file()
+        if records is None:
+            src = self.cfg().get("emotion_sets")
+            if isinstance(src, list) and src:
+                records = src
+                logger.info("[传话筒] 从配置加载 %s 个情绪标签", len(records))
+            else:
+                records = copy.deepcopy(self.DEFAULT_EMOTIONS)
+                logger.info("[传话筒] 使用内置默认情绪标签")
+        records = self._persist_emotion_sets(records)
+        self._emotion_records = records
         prepared: Dict[str, EmotionMeta] = {}
         enabled_keys: list[str] = []
         for item in records:
@@ -1126,81 +1206,11 @@ class ChuanHuaTongPlugin(Star):
         if not self._cached_emotions:
             self._cached_emotions = self._load_emotion_sets()
         return self._cached_emotions.copy()
-    
-    def _save_emotion_sets(self, emotion_sets: list[dict[str, Any]]) -> bool:
-        """保存情绪配置到配置文件"""
-        try:
-            # 验证数据格式
-            validated = []
-            for item in emotion_sets:
-                if not isinstance(item, dict):
-                    continue
-                key = str(item.get("key") or "").strip()
-                if not key:
-                    continue
-                validated.append({
-                    "key": key,
-                    "folder": str(item.get("folder") or key).strip(),
-                    "label": str(item.get("label") or key).strip(),
-                    "color": str(item.get("color") or "#FFFFFF").strip(),
-                    "enabled": bool(item.get("enabled", True)),
-                })
-            
-            if not validated:
-                return False
-            
-            # 保存到配置文件
-            if isinstance(self._cfg_obj, AstrBotConfig):
-                self._cfg_obj["emotion_sets"] = validated
-                if hasattr(self._cfg_obj, "save_config"):
-                    try:
-                        self._cfg_obj.save_config()
-                    except Exception:
-                        pass
-            
-            # 同时保存到文件（兼容性）
-            try:
-                self._emotion_file.write_text(
-                    json.dumps(validated, ensure_ascii=False, indent=2),
-                    encoding="utf-8"
-                )
-            except Exception:
-                pass
-            
-            # 清除缓存，强制重新加载
-            self._cached_emotions.clear()
-            return True
-        except Exception as exc:
-            logger.error("[传话筒] 保存情绪配置失败: %s", exc)
-            return False
-    
-    def _reset_emotion_sets(self) -> bool:
-        """重置情绪配置为默认值"""
-        try:
-            # 保存默认配置
-            if isinstance(self._cfg_obj, AstrBotConfig):
-                self._cfg_obj["emotion_sets"] = self.DEFAULT_EMOTIONS
-                if hasattr(self._cfg_obj, "save_config"):
-                    try:
-                        self._cfg_obj.save_config()
-                    except Exception:
-                        pass
-            
-            # 同时保存到文件
-            try:
-                self._emotion_file.write_text(
-                    json.dumps(self.DEFAULT_EMOTIONS, ensure_ascii=False, indent=2),
-                    encoding="utf-8"
-                )
-            except Exception:
-                pass
-            
-            # 清除缓存，强制重新加载
-            self._cached_emotions.clear()
-            return True
-        except Exception as exc:
-            logger.error("[传话筒] 重置情绪配置失败: %s", exc)
-            return False
+
+    def _emotion_payload(self) -> list[dict[str, Any]]:
+        if not self._emotion_records:
+            self._emotion_meta()
+        return copy.deepcopy(self._emotion_records)
 
     def _remove_emotion_tags(self, text: str) -> str:
         """移除文本中的情绪标签（&xxx&格式），参考 meme_manager_lite 的实现"""
@@ -1214,6 +1224,10 @@ class ChuanHuaTongPlugin(Star):
         # 清理行首行尾的空格（但保留换行符结构）
         lines = cleaned.split("\n")
         cleaned_lines = [line.strip() for line in lines]
+        while cleaned_lines and not cleaned_lines[0]:
+            cleaned_lines.pop(0)
+        while cleaned_lines and not cleaned_lines[-1]:
+            cleaned_lines.pop()
         cleaned = "\n".join(cleaned_lines)
         return cleaned
 
@@ -1252,13 +1266,7 @@ class ChuanHuaTongPlugin(Star):
         return self._file_to_data_url(Path(path))
 
     def _random_background_data(self, group: Optional[str] = None) -> str:
-        """获取随机背景的 data URL，支持按组筛选"""
-        target_dir = self._bg_dir
-        if group and group not in {"__auto__", "__random__", ""}:
-            group_dir = self._bg_dir / group
-            if group_dir.exists() and group_dir.is_dir():
-                target_dir = group_dir
-        path = self._pick_random_asset(target_dir, {".png", ".jpg", ".jpeg", ".webp"})
+        path = self._pick_background_path(group)
         self._last_background_path = path or ""
         return self._path_to_data_url(path)
 
@@ -1375,20 +1383,28 @@ class ChuanHuaTongPlugin(Star):
         if name and name not in {"__auto__", "__random__"}:
             path = self._resolve_background_file(name)
             if path:
+                self._last_background_path = path
                 return path
-        
-        # 根据 group 选择背景目录
-        target_dir = self._bg_dir
-        if group and group not in {"__auto__", "__random__", ""}:
-            group_dir = self._bg_dir / group
-            if group_dir.exists() and group_dir.is_dir():
-                target_dir = group_dir
-        
-        path = self._pick_random_asset(target_dir, {".png", ".jpg", ".jpeg", ".webp"})
+        path = self._pick_background_path(group)
         self._last_background_path = path or ""
         return path or ""
 
     def _resolve_background_file(self, name: str) -> str:
+        if not name:
+            return ""
+        if name.startswith("user::"):
+            parts = name.split("::", 2)
+            if len(parts) >= 3:
+                group = self._sanitize_folder_name(parts[1], "default")
+                filename = Path(parts[2]).name
+                target = self._user_bg_dir / group / filename
+                if target.exists():
+                    return str(target)
+        elif name.startswith("builtin::"):
+            safe = Path(name.split("::", 1)[1]).name
+            candidate = self._bg_dir / safe
+            if candidate.exists():
+                return str(candidate)
         safe = Path(name).name
         candidate = self._bg_dir / safe
         if candidate.exists():
@@ -1397,6 +1413,9 @@ class ChuanHuaTongPlugin(Star):
             candidate = directory / safe
             if candidate.exists():
                 return str(candidate)
+        candidate = self._user_bg_dir / safe
+        if candidate.exists():
+            return str(candidate)
         return ""
 
     def _resolve_character_file(self, name: str) -> str:
@@ -1909,6 +1928,7 @@ class ChuanHuaTongPlugin(Star):
     async def _handle_get_layout(self, request: web.Request):
         await self._authorize(request)
         emotions = self._emotion_meta()
+        emotion_payload = self._emotion_payload()
         layout = self._layout()
         payload = {
             "layout": layout,
@@ -1920,16 +1940,7 @@ class ChuanHuaTongPlugin(Star):
             "background_groups": self._list_background_groups(),
             "presets": self._list_presets(),
             "bot_name": self._bot_name(),
-            "emotion_sets": [
-                {
-                    "key": key,
-                    "folder": meta.folder,
-                    "label": meta.label,
-                    "color": meta.color,
-                    "enabled": meta.enabled,
-                }
-                for key, meta in emotions.items()
-            ],
+            "emotion_sets": emotion_payload,
             "canvas": {
                 "width": layout["canvas_width"],
                 "height": layout["canvas_height"],
@@ -2064,6 +2075,7 @@ class ChuanHuaTongPlugin(Star):
         kind = "component"
         emotion_from_form = ""
         role_from_form = ""
+        bg_group_from_form = ""
         if "multipart/form-data" in content_type:
             form = await request.post()
             file_field = form.get("file")
@@ -2073,6 +2085,7 @@ class ChuanHuaTongPlugin(Star):
             kind = str(form.get("kind") or "component").lower()
             emotion_from_form = str(form.get("emotion") or "").strip()
             role_from_form = str(form.get("role") or "").strip()
+            bg_group_from_form = str(form.get("background_group") or "").strip()
             binary_data = file_field.file.read()
         else:
             try:
@@ -2090,6 +2103,7 @@ class ChuanHuaTongPlugin(Star):
                 raise web.HTTPBadRequest(text="invalid data")
             emotion_from_form = str((payload or {}).get("emotion") or "").strip()
             role_from_form = str((payload or {}).get("role") or "").strip()
+            bg_group_from_form = str((payload or {}).get("background_group") or "").strip()
         if kind == "font":
             allowed = (".ttf", ".ttc", ".otf")
             target_dir = self._font_dir
@@ -2098,6 +2112,11 @@ class ChuanHuaTongPlugin(Star):
             emotion_folder = self._sanitize_folder_name(emotion_from_form or "custom", "custom")
             role_folder = self._sanitize_role_name(role_from_form or "general", "general")
             target_dir = self._user_char_dir / role_folder / emotion_folder
+            target_dir.mkdir(parents=True, exist_ok=True)
+        elif kind == "background":
+            allowed = (".png", ".jpg", ".jpeg", ".webp")
+            group_folder = self._sanitize_folder_name(bg_group_from_form or "default", "default")
+            target_dir = self._user_bg_dir / group_folder
             target_dir.mkdir(parents=True, exist_ok=True)
         else:
             allowed = (".png", ".webp", ".gif")
@@ -2118,6 +2137,8 @@ class ChuanHuaTongPlugin(Star):
             "components": self._list_components(),
             "fonts": self._list_fonts(),
             "characters": self._list_characters(),
+            "backgrounds": self._list_backgrounds(),
+            "background_groups": self._list_background_groups(),
         })
 
     async def _handle_component_file(self, request: web.Request):
@@ -2160,51 +2181,33 @@ class ChuanHuaTongPlugin(Star):
         return web.FileResponse(path, headers={"Content-Type": content_type})
 
     async def _handle_save_emotions(self, request: web.Request):
-        """保存情绪配置"""
         await self._authorize(request)
         try:
             body = await request.json()
         except Exception:
             raise web.HTTPBadRequest(text="invalid json")
-        emotions = body.get("emotions")
-        if not isinstance(emotions, list):
-            raise web.HTTPBadRequest(text="emotions must be a list")
-        success = self._save_emotion_sets(emotions)
-        if not success:
-            raise web.HTTPBadRequest(text="save failed")
-        # 重新加载情绪配置
-        emotions_meta = self._emotion_meta()
-        emotion_sets = [
-            {
-                "key": key,
-                "folder": meta.folder,
-                "label": meta.label,
-                "color": meta.color,
-                "enabled": meta.enabled,
-            }
-            for key, meta in emotions_meta.items()
-        ]
-        return web.json_response({"ok": True, "emotion_sets": emotion_sets})
+        records = body.get("emotions")
+        if not isinstance(records, list):
+            raise web.HTTPBadRequest(text="emotions required")
+        normalized = self._persist_emotion_sets(records)
+        self._emotion_records = normalized
+        self._cached_emotions.clear()
+        logger.info("[传话筒] WebUI 已保存情绪配置")
+        return web.json_response({
+            "ok": True,
+            "emotion_sets": self._emotion_payload(),
+        })
 
     async def _handle_reset_emotions(self, request: web.Request):
-        """重置情绪配置为默认值"""
         await self._authorize(request)
-        success = self._reset_emotion_sets()
-        if not success:
-            raise web.HTTPBadRequest(text="reset failed")
-        # 重新加载情绪配置
-        emotions_meta = self._emotion_meta()
-        emotion_sets = [
-            {
-                "key": key,
-                "folder": meta.folder,
-                "label": meta.label,
-                "color": meta.color,
-                "enabled": meta.enabled,
-            }
-            for key, meta in emotions_meta.items()
-        ]
-        return web.json_response({"ok": True, "emotion_sets": emotion_sets})
+        normalized = self._persist_emotion_sets(copy.deepcopy(self.DEFAULT_EMOTIONS))
+        self._emotion_records = normalized
+        self._cached_emotions.clear()
+        logger.info("[传话筒] WebUI 请求恢复默认情绪配置")
+        return web.json_response({
+            "ok": True,
+            "emotion_sets": self._emotion_payload(),
+        })
 
     if hasattr(filter, "on_message"):
 

@@ -305,6 +305,8 @@ class ChuanHuaTongPlugin(Star):
         self._font_dir.mkdir(parents=True, exist_ok=True)
         self._user_char_dir = self._data_dir / "characters"
         self._user_char_dir.mkdir(parents=True, exist_ok=True)
+        self._user_bg_dir = self._data_dir / "backgrounds"
+        self._user_bg_dir.mkdir(parents=True, exist_ok=True)
         self._presets_dir = self._data_dir / "presets"
         self._presets_dir.mkdir(parents=True, exist_ok=True)
         self._current_preset_file = self._data_dir / "current_preset.json"

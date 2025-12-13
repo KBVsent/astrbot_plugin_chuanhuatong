@@ -67,17 +67,17 @@
 
   "webui_host": {
     "type": "string",
-    "description": "WebUI 监听地址",
-    "default": "127.0.0.1"
+    "description": "WebUI 监听地址，本地可设置127.0.0.1",
+    "default": "0.0.0.0"
   },
   "webui_port": {
     "type": "int",
-    "description": "WebUI 端口",
+    "description": "WebUI 端口，可设置为astrbot现成端口（6180-6200）",
     "default": 18765
   },
   "webui_token": {
     "type": "string",
-    "description": "访问 WebUI 时需要附带的 token，可留空",
+    "description": "访问 WebUI 时需要附带的 token，可留空，服务器用户务必添加",
     "default": ""
   },
 

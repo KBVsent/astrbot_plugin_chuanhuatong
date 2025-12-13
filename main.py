@@ -97,10 +97,15 @@ class ChuanHuaTongPlugin(Star):
         "character_asset": "__auto__",
         "character_left": 1.0676156583630245,
         "character_bottom": 0,
+        "character_top": 0,
         "character_width": 499.72719967439286,
         "character_z_index": 140,
         "character_role": "__auto__",
+        "character_fit_mode": "fixed_width",
+        "character_uniform_height": 620,
+        "character_align_bottom": True,
         "character_shadow": "drop-shadow(0 12px 36px rgba(0,0,0,0.6))",
+        "background_group": "__auto__",
         "text_overlays": [
             {
                 "id": "ov_1764055391684",
@@ -853,6 +858,17 @@ class ChuanHuaTongPlugin(Star):
             if key in data and value is not None:
                 data[key] = value
         data["text_overlays"] = self._normalize_overlays((layout or {}).get("text_overlays"))
+        # 确保新字段有默认值（兼容旧布局）
+        if "background_group" not in data or not data.get("background_group"):
+            data["background_group"] = "__auto__"
+        if "character_fit_mode" not in data or not data.get("character_fit_mode"):
+            data["character_fit_mode"] = "fixed_width"
+        if "character_uniform_height" not in data:
+            data["character_uniform_height"] = 620
+        if "character_align_bottom" not in data:
+            data["character_align_bottom"] = True
+        if "character_top" not in data:
+            data["character_top"] = 0
         return data
 
     def _convert_legacy_layout(self, legacy: Dict[str, Any]) -> Dict[str, Any]:
@@ -1006,14 +1022,61 @@ class ChuanHuaTongPlugin(Star):
                 return str(candidate)
         return None
 
-    def _list_backgrounds(self) -> list[str]:
+    def _list_backgrounds(self, group: Optional[str] = None) -> list[str]:
+        """列出背景文件，支持按组筛选"""
         try:
+            if group and group not in {"__auto__", "__random__", ""}:
+                # 按组筛选：查找 group 子目录
+                group_dir = self._bg_dir / group
+                if group_dir.exists() and group_dir.is_dir():
+                    files = [
+                        f.name for f in group_dir.iterdir()
+                        if f.is_file() and f.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
+                    ]
+                    return sorted(files)
+            # 默认返回根目录下的所有背景
             return sorted([
                 f.name for f in self._bg_dir.iterdir()
                 if f.is_file() and f.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
             ])
         except Exception:
             return []
+    
+    def _list_background_groups(self) -> list[dict[str, Any]]:
+        """列出背景分组"""
+        groups: list[dict[str, Any]] = []
+        try:
+            if not self._bg_dir.exists():
+                return groups
+            
+            # 检查根目录是否有文件（内置组）
+            root_files = [
+                f for f in self._bg_dir.iterdir()
+                if f.is_file() and f.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
+            ]
+            if root_files:
+                groups.append({
+                    "id": "builtin",
+                    "label": "内置背景",
+                    "count": len(root_files)
+                })
+            
+            # 检查子目录（用户分组）
+            for item in self._bg_dir.iterdir():
+                if item.is_dir():
+                    files = [
+                        f for f in item.iterdir()
+                        if f.is_file() and f.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
+                    ]
+                    if files:
+                        groups.append({
+                            "id": item.name,
+                            "label": item.name,
+                            "count": len(files)
+                        })
+        except Exception:
+            logger.debug("[传话筒] 列出背景分组失败", exc_info=True)
+        return groups
 
     def _load_emotion_sets(self) -> Dict[str, EmotionMeta]:
         src = self.cfg().get("emotion_sets")
@@ -1063,6 +1126,81 @@ class ChuanHuaTongPlugin(Star):
         if not self._cached_emotions:
             self._cached_emotions = self._load_emotion_sets()
         return self._cached_emotions.copy()
+    
+    def _save_emotion_sets(self, emotion_sets: list[dict[str, Any]]) -> bool:
+        """保存情绪配置到配置文件"""
+        try:
+            # 验证数据格式
+            validated = []
+            for item in emotion_sets:
+                if not isinstance(item, dict):
+                    continue
+                key = str(item.get("key") or "").strip()
+                if not key:
+                    continue
+                validated.append({
+                    "key": key,
+                    "folder": str(item.get("folder") or key).strip(),
+                    "label": str(item.get("label") or key).strip(),
+                    "color": str(item.get("color") or "#FFFFFF").strip(),
+                    "enabled": bool(item.get("enabled", True)),
+                })
+            
+            if not validated:
+                return False
+            
+            # 保存到配置文件
+            if isinstance(self._cfg_obj, AstrBotConfig):
+                self._cfg_obj["emotion_sets"] = validated
+                if hasattr(self._cfg_obj, "save_config"):
+                    try:
+                        self._cfg_obj.save_config()
+                    except Exception:
+                        pass
+            
+            # 同时保存到文件（兼容性）
+            try:
+                self._emotion_file.write_text(
+                    json.dumps(validated, ensure_ascii=False, indent=2),
+                    encoding="utf-8"
+                )
+            except Exception:
+                pass
+            
+            # 清除缓存，强制重新加载
+            self._cached_emotions.clear()
+            return True
+        except Exception as exc:
+            logger.error("[传话筒] 保存情绪配置失败: %s", exc)
+            return False
+    
+    def _reset_emotion_sets(self) -> bool:
+        """重置情绪配置为默认值"""
+        try:
+            # 保存默认配置
+            if isinstance(self._cfg_obj, AstrBotConfig):
+                self._cfg_obj["emotion_sets"] = self.DEFAULT_EMOTIONS
+                if hasattr(self._cfg_obj, "save_config"):
+                    try:
+                        self._cfg_obj.save_config()
+                    except Exception:
+                        pass
+            
+            # 同时保存到文件
+            try:
+                self._emotion_file.write_text(
+                    json.dumps(self.DEFAULT_EMOTIONS, ensure_ascii=False, indent=2),
+                    encoding="utf-8"
+                )
+            except Exception:
+                pass
+            
+            # 清除缓存，强制重新加载
+            self._cached_emotions.clear()
+            return True
+        except Exception as exc:
+            logger.error("[传话筒] 重置情绪配置失败: %s", exc)
+            return False
 
     def _remove_emotion_tags(self, text: str) -> str:
         """移除文本中的情绪标签（&xxx&格式），参考 meme_manager_lite 的实现"""
@@ -1113,8 +1251,14 @@ class ChuanHuaTongPlugin(Star):
             return ""
         return self._file_to_data_url(Path(path))
 
-    def _random_background_data(self) -> str:
-        path = self._pick_random_asset(self._bg_dir, {".png", ".jpg", ".jpeg", ".webp"})
+    def _random_background_data(self, group: Optional[str] = None) -> str:
+        """获取随机背景的 data URL，支持按组筛选"""
+        target_dir = self._bg_dir
+        if group and group not in {"__auto__", "__random__", ""}:
+            group_dir = self._bg_dir / group
+            if group_dir.exists() and group_dir.is_dir():
+                target_dir = group_dir
+        path = self._pick_random_asset(target_dir, {".png", ".jpg", ".jpeg", ".webp"})
         self._last_background_path = path or ""
         return self._path_to_data_url(path)
 
@@ -1226,13 +1370,21 @@ class ChuanHuaTongPlugin(Star):
             return ""
         return random.choice(files)
 
-    def _resolve_background_asset(self, asset: str | None) -> str:
+    def _resolve_background_asset(self, asset: str | None, group: Optional[str] = None) -> str:
         name = str(asset or "").strip()
         if name and name not in {"__auto__", "__random__"}:
             path = self._resolve_background_file(name)
             if path:
                 return path
-        path = self._pick_random_asset(self._bg_dir, {".png", ".jpg", ".jpeg", ".webp"})
+        
+        # 根据 group 选择背景目录
+        target_dir = self._bg_dir
+        if group and group not in {"__auto__", "__random__", ""}:
+            group_dir = self._bg_dir / group
+            if group_dir.exists() and group_dir.is_dir():
+                target_dir = group_dir
+        
+        path = self._pick_random_asset(target_dir, {".png", ".jpg", ".jpeg", ".webp"})
         self._last_background_path = path or ""
         return path or ""
 
@@ -1372,7 +1524,8 @@ class ChuanHuaTongPlugin(Star):
         bg_color = self._hex_or_rgba(layout.get("background_color", "#05060A"))
         canvas = Image.new("RGBA", (width, height), bg_color)
 
-        bg_path = self._resolve_background_asset(layout.get("background_asset"))
+        bg_group = layout.get("background_group")
+        bg_path = self._resolve_background_asset(layout.get("background_asset"), bg_group)
         if bg_path:
             try:
                 bg_img = Image.open(bg_path).convert("RGBA").resize((width, height), Image.LANCZOS)
@@ -1417,13 +1570,33 @@ class ChuanHuaTongPlugin(Star):
             return
         try:
             img = Image.open(path).convert("RGBA")
-            target_w = max(1, int(layout.get("character_width", 520)))
-            ratio = target_w / max(1, img.width)
-            target_h = max(1, int(img.height * ratio))
+            fit_mode = str(layout.get("character_fit_mode", "fixed_width")).lower()
+            align_bottom = layout.get("character_align_bottom", True)
+            
+            # 根据 fit_mode 计算目标尺寸
+            if fit_mode == "uniform_height":
+                # 统一高度模式
+                target_h = max(1, int(layout.get("character_uniform_height", 620)))
+                ratio = target_h / max(1, img.height)
+                target_w = max(1, int(img.width * ratio))
+            else:
+                # 固定宽度模式（默认）
+                target_w = max(1, int(layout.get("character_width", 520)))
+                ratio = target_w / max(1, img.width)
+                target_h = max(1, int(img.height * ratio))
+            
             img = img.resize((target_w, target_h), Image.LANCZOS)
             left = int(layout.get("character_left", 40))
-            bottom = int(layout.get("character_bottom", 0))
-            top = max(0, canvas.height - target_h - bottom)
+            
+            # 根据 align_bottom 计算垂直位置
+            if align_bottom:
+                # 底部对齐
+                bottom = int(layout.get("character_bottom", 0))
+                top = max(0, canvas.height - target_h - bottom)
+            else:
+                # 顶部对齐
+                top = int(layout.get("character_top", 0))
+            
             canvas.alpha_composite(img, (left, top))
         except Exception:
             logger.debug("[传话筒] 立绘渲染失败", exc_info=True)
@@ -1686,6 +1859,8 @@ class ChuanHuaTongPlugin(Star):
                     web.get("/api/backgrounds/raw/{name}", self._handle_background_file),
                     web.get("/api/characters/raw/{name}", self._handle_character_file),
                     web.get("/api/fonts/raw/{name}", self._handle_font_file),
+                    web.post("/api/emotions/save", self._handle_save_emotions),
+                    web.post("/api/emotions/reset", self._handle_reset_emotions),
                 ]
             )
             self._web_app = app
@@ -1742,6 +1917,7 @@ class ChuanHuaTongPlugin(Star):
             "character_roles": self._list_character_roles(),
             "fonts": self._list_fonts(),
             "backgrounds": self._list_backgrounds(),
+            "background_groups": self._list_background_groups(),
             "presets": self._list_presets(),
             "bot_name": self._bot_name(),
             "emotion_sets": [
@@ -1764,8 +1940,9 @@ class ChuanHuaTongPlugin(Star):
     async def _handle_preview_assets(self, request: web.Request):
         await self._authorize(request)
         role = str(request.query.get("role", "")).strip() or None
+        bg_group = str(request.query.get("bg_group", "")).strip() or None
         preview = {
-            "background": self._random_background_data(),
+            "background": self._random_background_data(bg_group),
             "character": self._preview_character(role),
         }
         return web.json_response(preview)
@@ -1981,6 +2158,53 @@ class ChuanHuaTongPlugin(Star):
         else:
             content_type = "font/ttf"
         return web.FileResponse(path, headers={"Content-Type": content_type})
+
+    async def _handle_save_emotions(self, request: web.Request):
+        """保存情绪配置"""
+        await self._authorize(request)
+        try:
+            body = await request.json()
+        except Exception:
+            raise web.HTTPBadRequest(text="invalid json")
+        emotions = body.get("emotions")
+        if not isinstance(emotions, list):
+            raise web.HTTPBadRequest(text="emotions must be a list")
+        success = self._save_emotion_sets(emotions)
+        if not success:
+            raise web.HTTPBadRequest(text="save failed")
+        # 重新加载情绪配置
+        emotions_meta = self._emotion_meta()
+        emotion_sets = [
+            {
+                "key": key,
+                "folder": meta.folder,
+                "label": meta.label,
+                "color": meta.color,
+                "enabled": meta.enabled,
+            }
+            for key, meta in emotions_meta.items()
+        ]
+        return web.json_response({"ok": True, "emotion_sets": emotion_sets})
+
+    async def _handle_reset_emotions(self, request: web.Request):
+        """重置情绪配置为默认值"""
+        await self._authorize(request)
+        success = self._reset_emotion_sets()
+        if not success:
+            raise web.HTTPBadRequest(text="reset failed")
+        # 重新加载情绪配置
+        emotions_meta = self._emotion_meta()
+        emotion_sets = [
+            {
+                "key": key,
+                "folder": meta.folder,
+                "label": meta.label,
+                "color": meta.color,
+                "enabled": meta.enabled,
+            }
+            for key, meta in emotions_meta.items()
+        ]
+        return web.json_response({"ok": True, "emotion_sets": emotion_sets})
 
     if hasattr(filter, "on_message"):
 

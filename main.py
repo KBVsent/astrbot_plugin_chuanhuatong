@@ -2263,21 +2263,45 @@ class ChuanHuaTongPlugin(Star):
         except Exception as e:
             logger.debug("[传话筒] 清理对话历史中的表情标签失败: %s", e)
 
-    @filter.on_llm_response(priority=-10)  # 降低优先级，确保在其他插件之后处理
-    async def handle_llm_response(self, event: AstrMessageEvent, resp: LLMResponse):
-        """保存响应对象，供 on_decorating_result 使用"""
+    @filter.on_llm_response(priority=100000)  # 提供优先级，确保在其他插件之前优先清洗
+    async def get_emotion_tag(self, event: AstrMessageEvent, resp: LLMResponse):
+        """保存响应对象并提取表情标签，供 on_decorating_result 使用"""
         if not self._cfg_bool("enable_render", True):
             return
-        # 保存响应对象，供后续钩子使用
+        
+        # 提取并清理LLM响应中的表情标签
+        emotion_tag = None
+        raw_text = ""
+        
+        # 从响应对象中提取文本
+        for attr in ("text", "output_text", "content", "completion_text"):
+            if hasattr(resp, attr):
+                value = getattr(resp, attr)
+                if isinstance(value, str) and value.strip():
+                    raw_text = value
+                    break
+        
+        if raw_text:
+            # 提取表情标签并清理文本
+            emotion_tag, cleaned_text = self._emotion_from_text(raw_text)
+            
+            # 更新响应对象中的文本
+            for attr in ("text", "output_text", "content", "completion_text"):
+                if hasattr(resp, attr):
+                    setattr(resp, attr, cleaned_text)
+        
+        # 保存响应对象和提取到的表情标签
         event.set_extra("llm_resp", resp)
+        if emotion_tag:
+            event.set_extra("extracted_emotion_tag", emotion_tag)
 
     @filter.on_decorating_result(priority=-10)  # 降低优先级，确保在其他插件之后处理
     async def on_decorating_result(self, event: AstrMessageEvent):
-        """在装饰结果时清理表情标签，参考 meme_manager_lite 的实现"""
+        """在装饰结果时使用已提取的表情标签，不再重复清洗消息链"""
         session_id = event.unified_msg_origin
         logger.debug("[传话筒] on_decorating_result 触发，会话: %s", session_id)
         
-        # 获取当前结果并清理消息链中的文本（无论是否启用渲染，都要清洗标签）
+        # 获取当前结果
         result = event.get_result()
         if not result:
             logger.debug("[传话筒] 未获取到结果对象，跳过处理")
@@ -2287,50 +2311,24 @@ class ChuanHuaTongPlugin(Star):
             logger.debug("[传话筒] 消息链为空，跳过处理")
             return
         
-        logger.debug("[传话筒] 开始处理消息链，原始链长度: %s", len(chain))
+        logger.debug("[传话筒] 开始处理消息链，链长度: %s", len(chain))
         
-        # 第一步：清洗标签并更新消息链（无论是否渲染，都要先清洗）
-        raw_text_parts = []
-        new_chain = []
+        # 检查消息链是否包含非文本组件
         has_non_text = False
+        raw_text_parts = []
         
         for item in chain:
             if isinstance(item, PLAIN_COMPONENT_TYPES):
-                original_text = getattr(item, "text", "") or ""
-                raw_text_parts.append(original_text)
-                cleaned_text = self._remove_emotion_tags(original_text)
-                logger.debug("[传话筒] 清洗文本: 原始='%s', 清洗后='%s'", original_text[:50], cleaned_text[:50] if cleaned_text else "")
-                if cleaned_text:
-                    new_item = type(item)(cleaned_text)
-                    new_chain.append(new_item)
+                text = getattr(item, "text", "") or ""
+                raw_text_parts.append(text)
             else:
                 has_non_text = True
-                new_chain.append(item)
         
-        # 立即更新消息链为清洗后的文本（确保无论后续是否渲染，都返回清洗后的文本）
-        result.chain = new_chain
-        logger.info("[传话筒] 消息链已更新为清洗后的文本，新链长度: %s, 包含非文本组件: %s", len(new_chain), has_non_text)
+        logger.debug("[传话筒] 消息链分析完成，包含非文本组件: %s", has_non_text)
         
-        # 清理响应对象中的表情标签
+        # 获取响应对象（不再需要重新清理，因为已经在handle_llm_response中清理过了）
         resp = event.get_extra("llm_resp")
         resp_obj = resp if isinstance(resp, LLMResponse) else None
-        if resp_obj:
-            logger.debug("[传话筒] 清理LLM响应对象中的表情标签")
-            if hasattr(resp_obj, "completion_text") and resp_obj.completion_text:
-                original = resp_obj.completion_text
-                resp_obj.completion_text = self._remove_emotion_tags(resp_obj.completion_text)
-                if original != resp_obj.completion_text:
-                    logger.debug("[传话筒] completion_text 已清理标签，原始长度: %s, 清理后长度: %s", len(original), len(resp_obj.completion_text))
-            elif hasattr(resp_obj, "text") and resp_obj.text:
-                original = resp_obj.text
-                resp_obj.text = self._remove_emotion_tags(resp_obj.text)
-                if original != resp_obj.text:
-                    logger.debug("[传话筒] text 已清理标签，原始长度: %s, 清理后长度: %s", len(original), len(resp_obj.text))
-            elif hasattr(resp_obj, "content") and resp_obj.content:
-                original = resp_obj.content
-                resp_obj.content = self._remove_emotion_tags(resp_obj.content)
-                if original != resp_obj.content:
-                    logger.debug("[传话筒] content 已清理标签，原始长度: %s, 清理后长度: %s", len(original), len(resp_obj.content))
         
         # 第二步：判断是否要渲染（只有在启用渲染且会话启用的情况下才渲染）
         if not self._cfg_bool("enable_render", True):
@@ -2353,8 +2351,10 @@ class ChuanHuaTongPlugin(Star):
         # 第三步：如果只有文本组件，尝试渲染
         if not has_non_text and raw_text_parts:
             raw_full_text = "".join(raw_text_parts)
-            emotion, cleaned_full_text = self._emotion_from_text(raw_full_text)
-            full_text = cleaned_full_text.strip()
+            # 使用handle_llm_response中提取的表情标签
+            emotion = event.get_extra("extracted_emotion_tag")
+            # 文本已经在handle_llm_response中清洗过，直接使用
+            full_text = raw_full_text.strip()
             if full_text:
                 logger.info("[传话筒] 触发渲染判断，情绪=%s，原始文本长度=%s，清洗后长度=%s，清洗后文本='%s'", 
                           emotion, len(raw_full_text), len(full_text), full_text[:100])

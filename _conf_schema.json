@@ -56,7 +56,7 @@
   "emotion_prompt_template": {
     "type": "text",
     "description": "追加到 system_prompt 的提示，可用 {tags} 代表全部标签",
-    "default": "当你回答时，请根据文本情绪，在回答正文最前面插入一个情绪标签，包括且仅限 {tags} 中的一个。标签不得含有其他符号，不得在句中插入，只能在句首插入。"
+    "default": "请在每一次回复的开头添加一条情绪标签（包括且仅限 {tags} 中的一个）作为文本前缀。【警告⚠️】：工具调用响应时切勿添加表情标签！！！"
   },
 
   "webui_enabled": {
